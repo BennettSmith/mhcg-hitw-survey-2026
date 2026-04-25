@@ -15,12 +15,14 @@ Docker (from repo root):
 
 from __future__ import annotations
 
+import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
 PHOTOS_DIR = (ROOT / "photos").resolve()
@@ -32,15 +34,40 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 app = FastAPI(title="Survey photo viewer")
 _photos_cache: list[dict] | None = None
 _track_cache: list[list[float]] | None = None
+_profile_cache: dict | None = None
+
+_EARTH_RADIUS_M = 6_371_000.0
 
 
-def _parse_gpx_track_points(path: Path) -> list[list[float]]:
-    """Return [lat, lon] pairs from all trkpt elements in a GPX 1.1 file."""
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    h = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _parse_gpx_track_profile(path: Path) -> dict:
+    """
+    Parse trkpt sequence: lat, lon, elevation (m), cumulative distance (m).
+    Returns coordinates for Leaflet plus parallel arrays for the elevation chart.
+    """
+    empty: dict = {
+        "coordinates": [],
+        "distances_m": [],
+        "elevations_m": [],
+        "total_distance_m": 0.0,
+    }
     if not path.is_file() or path.parent.resolve() != TRACK_DIR:
-        return []
+        return empty
     tree = ET.parse(path)
     root = tree.getroot()
-    points: list[list[float]] = []
+    coords: list[list[float]] = []
+    dists: list[float] = []
+    eles: list[float] = []
+    cum = 0.0
+    prev_lat: float | None = None
+    prev_lon: float | None = None
     for el in root.iter():
         tag = el.tag.split("}")[-1]
         if tag != "trkpt":
@@ -49,31 +76,73 @@ def _parse_gpx_track_points(path: Path) -> list[list[float]]:
         if lat_s is None or lon_s is None:
             continue
         try:
-            points.append([float(lat_s), float(lon_s)])
+            lat, lon = float(lat_s), float(lon_s)
         except ValueError:
             continue
-    return points
+        ele: float | None = None
+        for child in el:
+            if child.tag.split("}")[-1] == "ele" and child.text:
+                try:
+                    ele = float(child.text.strip())
+                except ValueError:
+                    ele = None
+                break
+        if ele is None:
+            ele = float("nan")
+        if prev_lat is not None and prev_lon is not None:
+            cum += _haversine_m(prev_lat, prev_lon, lat, lon)
+        prev_lat, prev_lon = lat, lon
+        coords.append([lat, lon])
+        dists.append(cum)
+        eles.append(ele)
+    return {
+        "coordinates": coords,
+        "distances_m": dists,
+        "elevations_m": eles,
+        "total_distance_m": cum,
+    }
 
 
 def _load_track_coordinates() -> list[list[float]]:
     global _track_cache
     if _track_cache is not None:
         return _track_cache
-    _track_cache = _parse_gpx_track_points(GPX_PATH)
+    prof = _load_track_profile()
+    _track_cache = prof["coordinates"]
     return _track_cache
+
+
+def _load_track_profile() -> dict:
+    global _profile_cache
+    if _profile_cache is not None:
+        return _profile_cache
+    _profile_cache = _parse_gpx_track_profile(GPX_PATH)
+    return _profile_cache
+
+
+def _read_photos_from_disk() -> list[dict]:
+    if not YAML_PATH.is_file():
+        return []
+    with YAML_PATH.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    return list(data.get("photos") or [])
 
 
 def _load_photos() -> list[dict]:
     global _photos_cache
     if _photos_cache is not None:
         return _photos_cache
-    if not YAML_PATH.is_file():
-        _photos_cache = []
-        return _photos_cache
-    with YAML_PATH.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    _photos_cache = data.get("photos") or []
+    _photos_cache = _read_photos_from_disk()
     return _photos_cache
+
+
+def invalidate_photos_cache() -> None:
+    global _photos_cache
+    _photos_cache = None
+
+
+class PhotoNotesBody(BaseModel):
+    notes: str = Field(default="", max_length=16000)
 
 
 @app.get("/api/photos")
@@ -81,11 +150,46 @@ def api_photos() -> list[dict]:
     return _load_photos()
 
 
+@app.put("/api/photos/{filename}/notes")
+def put_photo_notes(filename: str, body: PhotoNotesBody) -> dict:
+    """Persist field notes for one photo in survey_photos.yaml (basename only)."""
+    name = Path(filename).name
+    if name != filename or not name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    photos = _read_photos_from_disk()
+    found = False
+    for row in photos:
+        if row.get("filename") == name:
+            row["notes"] = body.notes
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Photo not in manifest")
+    with YAML_PATH.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            {"photos": photos},
+            f,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        )
+    invalidate_photos_cache()
+    return {"ok": True, "filename": name, "notes": body.notes}
+
+
 @app.get("/api/track")
 def api_track() -> dict:
     """Hike polyline as [[lat, lon], ...] for Leaflet (empty if GPX missing)."""
     coords = _load_track_coordinates()
     return {"coordinates": coords}
+
+
+@app.get("/api/track-profile")
+def api_track_profile() -> dict:
+    """
+    GPX track with cumulative horizontal distance (m) and elevation (m) per vertex.
+    """
+    return _load_track_profile()
 
 
 @app.get("/media/{filename}")

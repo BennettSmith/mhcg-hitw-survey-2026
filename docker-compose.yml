@@ -4,6 +4,6 @@ services:
     ports:
       - "8765:8000"
     volumes:
-      - ./survey_photos.yaml:/work/survey_photos.yaml:ro
+      - ./survey_photos.yaml:/work/survey_photos.yaml
       - ./photos:/work/photos:ro
       - ./track:/work/track:ro

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Read EXIF from trail photos and write a YAML manifest (filename, timestamp, lat/lon).
+Read EXIF from trail photos and write a YAML manifest (filename, timestamp, lat/lon, notes).
+
+If the output file already exists, existing ``notes`` per ``filename`` are preserved when
+re-running the script so field notes are not wiped.
 
 Usage (from repo root, after `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`):
 
@@ -88,6 +91,28 @@ def exif_lat_lon(exif) -> tuple[float | None, float | None]:
         return None, None
 
 
+def load_existing_notes_by_filename(yaml_path: Path) -> dict[str, str]:
+    """If a manifest already exists, preserve per-filename notes for merge on re-extract."""
+    if not yaml_path.is_file():
+        return {}
+    try:
+        with yaml_path.open(encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for row in data.get("photos") or []:
+        fn = row.get("filename")
+        if not isinstance(fn, str) or not fn:
+            continue
+        n = row.get("notes")
+        if isinstance(n, str):
+            out[fn] = n
+        elif n is None:
+            out[fn] = ""
+    return out
+
+
 def iter_image_paths(photos_dir: Path) -> list[Path]:
     paths: list[Path] = []
     for pattern in ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG", "*.heic", "*.HEIC"):
@@ -121,6 +146,9 @@ def main() -> int:
         print(f"Not a directory: {photos_dir}", file=sys.stderr)
         return 1
 
+    out_path = args.out.resolve()
+    existing_notes = load_existing_notes_by_filename(out_path)
+
     records: list[dict] = []
     skipped: list[str] = []
 
@@ -152,10 +180,10 @@ def main() -> int:
                 "taken_at": taken_iso,
                 "latitude": round(lat, 7),
                 "longitude": round(lon, 7),
+                "notes": existing_notes.get(path.name, ""),
             }
         )
 
-    out_path = args.out.resolve()
     out_path.write_text(
         yaml.safe_dump(
             {"photos": records},

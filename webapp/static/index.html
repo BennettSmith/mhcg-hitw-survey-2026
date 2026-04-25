@@ -188,25 +188,47 @@
         background: #e3f2e6;
         border-color: #5a9a62;
       }
+      /* Photo (left, wider share) | elevation (2/3 of maps strip) + photo map (1/3) on row 1;
+         survey track spans the maps strip on row 2 (taller). */
       #visuals {
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr);
+        grid-template-columns: minmax(260px, 1.65fr) minmax(0, 2fr) minmax(0, 1fr);
+        grid-template-rows: minmax(115px, 0.3fr) minmax(240px, 1fr);
         gap: 0.75rem;
       }
       .photo-card {
         grid-column: 1;
         grid-row: 1 / -1;
       }
-      .map-track-card {
+      .elevation-card {
         grid-column: 2;
         grid-row: 1;
+        min-height: 0;
+      }
+      .elevation-wrap {
+        flex: 1;
+        min-height: 100px;
+        max-height: 260px;
+        position: relative;
+        padding: 0.25rem 0.45rem 0.35rem;
+        background: #faf9f7;
+      }
+      #elevation-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
       }
       .map-photo-card {
-        grid-column: 2;
+        grid-column: 3;
+        grid-row: 1;
+        min-height: 0;
+      }
+      .map-track-card {
+        grid-column: 2 / 4;
         grid-row: 2;
+        min-height: 0;
       }
       @media (max-width: 900px) {
         main {
@@ -227,10 +249,17 @@
           grid-column: 1;
           grid-row: auto;
         }
+        .elevation-card {
+          grid-column: 1;
+          grid-row: auto;
+        }
         .map-track-card,
         .map-photo-card {
           grid-column: 1;
           grid-row: auto;
+        }
+        .map-track-card {
+          min-height: 260px;
         }
       }
       .card {
@@ -266,6 +295,50 @@
         max-height: 100%;
         object-fit: contain;
       }
+      .photo-notes-section {
+        flex: 0 0 auto;
+        border-top: 1px solid var(--border);
+        padding: 0.5rem 0.65rem 0.55rem;
+        background: #faf9f7;
+      }
+      .photo-notes-section label {
+        display: block;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      #photo-notes {
+        width: 100%;
+        min-height: 4.5rem;
+        max-height: 12rem;
+        resize: vertical;
+        font: inherit;
+        font-size: 0.82rem;
+        line-height: 1.35;
+        padding: 0.4rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        box-sizing: border-box;
+      }
+      #photo-notes:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .notes-status {
+        font-size: 0.72rem;
+        min-height: 1.15em;
+        color: var(--muted);
+        margin-top: 0.3rem;
+      }
+      .notes-status.ok {
+        color: #2d6b36;
+      }
+      .notes-status.err {
+        color: #9a2c2c;
+      }
       .map-host {
         flex: 1;
         min-height: 220px;
@@ -296,14 +369,31 @@
             <div id="photo-wrap">
               <img id="photo" alt="" />
             </div>
+            <div class="photo-notes-section">
+              <label for="photo-notes">Trail / ranger notes</label>
+              <textarea
+                id="photo-notes"
+                rows="4"
+                maxlength="16000"
+                placeholder="Observations for this spot (saved to survey_photos.yaml)…"
+                spellcheck="true"
+              ></textarea>
+              <div id="photo-notes-status" class="notes-status" aria-live="polite"></div>
+            </div>
           </div>
-          <div class="card map-track-card">
-            <h2>Survey track</h2>
-            <div id="map-track" class="map-host" role="presentation"></div>
+          <div class="card elevation-card">
+            <h2>Elevation profile</h2>
+            <div class="elevation-wrap">
+              <canvas id="elevation-canvas" aria-label="Hike elevation by distance along trail"></canvas>
+            </div>
           </div>
           <div class="card map-photo-card">
             <h2>Photo location</h2>
             <div id="map-photo" class="map-host" role="presentation"></div>
+          </div>
+          <div class="card map-track-card">
+            <h2>Survey track</h2>
+            <div id="map-track" class="map-host" role="presentation"></div>
           </div>
         </div>
       </section>
@@ -345,11 +435,99 @@
         let filtered = [];
         let selected = null;
         let trackCoords = [];
+        let profileDist = [];
+        let profileEle = [];
+        let profileTotalM = 0;
+        var lastElevationAlongM = null;
         let trackMap = null;
         let photoMap = null;
         let trackLine = null;
+        let photoTrackLine = null;
         let trackMarker = null;
         let photoMarker = null;
+
+        var notesDebounceTimer = null;
+        var notesStatusClearTimer = null;
+
+        function setNotesStatus(msg, isOk) {
+          var el = document.getElementById("photo-notes-status");
+          if (!el) {
+            return;
+          }
+          el.textContent = msg || "";
+          el.className = "notes-status";
+          if (msg && isOk === true) {
+            el.classList.add("ok");
+          }
+          if (msg && isOk === false) {
+            el.classList.add("err");
+          }
+          if (notesStatusClearTimer) {
+            clearTimeout(notesStatusClearTimer);
+          }
+          if (msg) {
+            notesStatusClearTimer = setTimeout(function () {
+              el.textContent = "";
+              el.className = "notes-status";
+            }, 2200);
+          }
+        }
+
+        function scheduleNotesDebouncedSave() {
+          if (notesDebounceTimer) {
+            clearTimeout(notesDebounceTimer);
+          }
+          notesDebounceTimer = setTimeout(function () {
+            notesDebounceTimer = null;
+            void persistNotesForCurrentSelection();
+          }, 650);
+        }
+
+        function persistNotesForCurrentSelection() {
+          if (!selected) {
+            return Promise.resolve();
+          }
+          var ta = document.getElementById("photo-notes");
+          if (!ta) {
+            return Promise.resolve();
+          }
+          var v = ta.value;
+          var prev = selected.notes == null ? "" : String(selected.notes);
+          if (v === prev) {
+            return Promise.resolve();
+          }
+          setNotesStatus("Saving…", null);
+          return fetch(
+            "/api/photos/" + encodeURIComponent(selected.filename) + "/notes",
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ notes: v }),
+            }
+          )
+            .then(function (r) {
+              if (!r.ok) {
+                throw new Error(r.statusText);
+              }
+              return r.json();
+            })
+            .then(function () {
+              selected.notes = v;
+              setNotesStatus("Saved", true);
+            })
+            .catch(function () {
+              setNotesStatus("Save failed", false);
+            });
+        }
+
+        function syncNotesFromSelection() {
+          var ta = document.getElementById("photo-notes");
+          if (!ta || !selected) {
+            return;
+          }
+          ta.value = selected.notes == null ? "" : String(selected.notes);
+          setNotesStatus("", null);
+        }
 
         function esc(s) {
           const d = document.createElement("div");
@@ -453,6 +631,15 @@
             var sel = id === storedFmt ? ' selected="selected"' : "";
             return '<option value="' + id + '"' + sel + ">" + esc(pair[1]) + "</option>";
           }).join("");
+          var latN = Number(p.latitude);
+          var lonN = Number(p.longitude);
+          var elevM = trailElevationMForCoords(latN, lonN);
+          var elevDd =
+            elevM != null && isFinite(elevM)
+              ? '<dd title="Interpolated from survey GPX at the closest point on the trail to this photo’s coordinates.">' +
+                esc(String(Math.round(elevM))) +
+                " m</dd>"
+              : '<dd title="Load the hike GPX or ensure coordinates lie near the track.">—</dd>';
           metaEl.innerHTML =
             "<dl>" +
             "<dt>Filename</dt><dd>" +
@@ -473,6 +660,8 @@
             "</select>" +
             '<button type="button" id="copy-coords-btn" title="Copy coordinates in the selected format">Copy</button>' +
             "</span></dd>" +
+            "<dt>Elevation</dt>" +
+            elevDd +
             "</dl>";
         }
 
@@ -524,6 +713,7 @@
             photoMap = null;
           }
           trackLine = null;
+          photoTrackLine = null;
           trackMarker = null;
           photoMarker = null;
         }
@@ -534,6 +724,266 @@
           }
           if (photoMap) {
             photoMap.invalidateSize();
+          }
+          drawElevationProfile(lastElevationAlongM);
+        }
+
+        function elevationAtDistance(d) {
+          if (!profileDist.length || profileDist.length !== profileEle.length) {
+            return null;
+          }
+          if (d <= profileDist[0]) {
+            return profileEle[0];
+          }
+          var dLast = profileDist[profileDist.length - 1];
+          if (d >= dLast) {
+            return profileEle[profileEle.length - 1];
+          }
+          for (var i = 0; i < profileDist.length - 1; i++) {
+            var d0 = profileDist[i];
+            var d1 = profileDist[i + 1];
+            if (d >= d0 && d <= d1) {
+              var t = (d - d0) / (d1 - d0 || 1e-12);
+              var e0 = profileEle[i];
+              var e1 = profileEle[i + 1];
+              if (!isFinite(e0)) {
+                e0 = e1;
+              }
+              if (!isFinite(e1)) {
+                e1 = e0;
+              }
+              return e0 + t * (e1 - e0);
+            }
+          }
+          return profileEle[0];
+        }
+
+        function closestAlongTrackM(lat, lon) {
+          if (!trackCoords || trackCoords.length < 2 || !profileDist.length) {
+            return 0;
+          }
+          var bestAlong = 0;
+          var bestD2 = Infinity;
+          var R = 6371000;
+          var rad = Math.PI / 180;
+          for (var i = 0; i < trackCoords.length - 1; i++) {
+            var a = trackCoords[i];
+            var b = trackCoords[i + 1];
+            var d0 = profileDist[i];
+            var segLen = profileDist[i + 1] - d0;
+            if (segLen <= 0) {
+              continue;
+            }
+            var lat0 = a[0];
+            var lon0 = a[1];
+            var bx = (b[1] - lon0) * rad * R * Math.cos(lat0 * rad);
+            var by = (b[0] - lat0) * rad * R;
+            var px = (lon - lon0) * rad * R * Math.cos(lat0 * rad);
+            var py = (lat - lat0) * rad * R;
+            var denom = bx * bx + by * by || 1e-12;
+            var t = (px * bx + py * by) / denom;
+            if (t < 0) {
+              t = 0;
+            } else if (t > 1) {
+              t = 1;
+            }
+            var qx = bx * t;
+            var qy = by * t;
+            var dx = px - qx;
+            var dy = py - qy;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) {
+              bestD2 = d2;
+              bestAlong = d0 + t * segLen;
+            }
+          }
+          return bestAlong;
+        }
+
+        /** Elevation (m) from GPX at the trail point nearest lat/lon, or null if unavailable. */
+        function trailElevationMForCoords(lat, lon) {
+          if (
+            !trackCoords.length ||
+            trackCoords.length < 2 ||
+            !profileDist.length ||
+            profileDist.length !== profileEle.length
+          ) {
+            return null;
+          }
+          if (!isFinite(lat) || !isFinite(lon)) {
+            return null;
+          }
+          var d = closestAlongTrackM(lat, lon);
+          var e = elevationAtDistance(d);
+          if (e == null || !isFinite(e)) {
+            return null;
+          }
+          return e;
+        }
+
+        function updateElevationForSelection(lat, lon) {
+          if (
+            !trackCoords.length ||
+            !profileDist.length ||
+            profileDist.length !== profileEle.length
+          ) {
+            lastElevationAlongM = null;
+            drawElevationProfile(null);
+            return;
+          }
+          var d = closestAlongTrackM(lat, lon);
+          lastElevationAlongM = d;
+          drawElevationProfile(d);
+        }
+
+        function drawElevationProfile(alongM) {
+          var canvas = document.getElementById("elevation-canvas");
+          var wrap = document.querySelector(".elevation-wrap");
+          if (!canvas || !wrap) {
+            return;
+          }
+          var w = wrap.clientWidth;
+          var h = wrap.clientHeight;
+          if (w < 8 || h < 8) {
+            return;
+          }
+          var dpr = window.devicePixelRatio || 1;
+          canvas.width = Math.floor(w * dpr);
+          canvas.height = Math.floor(h * dpr);
+          canvas.style.width = w + "px";
+          canvas.style.height = h + "px";
+          var ctx = canvas.getContext("2d");
+          if (!ctx) {
+            return;
+          }
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, w, h);
+          if (!profileDist.length || profileDist.length !== profileEle.length) {
+            ctx.fillStyle = "#5c5852";
+            ctx.font = "12px system-ui,sans-serif";
+            ctx.fillText("No GPX profile", 10, 22);
+            return;
+          }
+          var padL = 48;
+          var padR = 8;
+          var padT = 6;
+          var padB = 24;
+          var iw = w - padL - padR;
+          var ih = h - padT - padB;
+          var emin = Infinity;
+          var emax = -Infinity;
+          var j;
+          for (j = 0; j < profileEle.length; j++) {
+            var ev = profileEle[j];
+            if (isFinite(ev)) {
+              if (ev < emin) {
+                emin = ev;
+              }
+              if (ev > emax) {
+                emax = ev;
+              }
+            }
+          }
+          if (!(emin < emax)) {
+            emin -= 10;
+            emax += 10;
+          } else {
+            var epad = (emax - emin) * 0.06 || 3;
+            emin -= epad;
+            emax += epad;
+          }
+          var dmax =
+            profileTotalM > 0
+              ? profileTotalM
+              : profileDist[profileDist.length - 1] || 1;
+          function xOf(dist) {
+            return padL + (dist / dmax) * iw;
+          }
+          function yOf(elev) {
+            return padT + ((emax - elev) / (emax - emin || 1)) * ih;
+          }
+          ctx.strokeStyle = "#d9d4cd";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padL, padT);
+          ctx.lineTo(padL, padT + ih);
+          ctx.lineTo(padL + iw, padT + ih);
+          ctx.stroke();
+          ctx.strokeStyle = "#eceae6";
+          ctx.lineWidth = 1;
+          for (j = 1; j <= 3; j++) {
+            var gy = padT + (ih * j) / 4;
+            ctx.beginPath();
+            ctx.moveTo(padL, gy);
+            ctx.lineTo(padL + iw, gy);
+            ctx.stroke();
+          }
+          var pts = [];
+          for (j = 0; j < profileDist.length; j++) {
+            if (!isFinite(profileEle[j])) {
+              continue;
+            }
+            pts.push({
+              x: xOf(profileDist[j]),
+              y: yOf(profileEle[j]),
+            });
+          }
+          if (pts.length < 2) {
+            ctx.fillStyle = "#5c5852";
+            ctx.font = "12px system-ui,sans-serif";
+            ctx.fillText("Not enough elevation points", 10, 22);
+            return;
+          }
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (j = 1; j < pts.length; j++) {
+            ctx.lineTo(pts[j].x, pts[j].y);
+          }
+          ctx.lineTo(pts[pts.length - 1].x, padT + ih);
+          ctx.lineTo(pts[0].x, padT + ih);
+          ctx.closePath();
+          ctx.fillStyle = "rgba(47, 111, 122, 0.14)";
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (j = 1; j < pts.length; j++) {
+            ctx.lineTo(pts[j].x, pts[j].y);
+          }
+          ctx.strokeStyle = "#2f6f7a";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.fillStyle = "#5c5852";
+          ctx.font = "11px system-ui, sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText("0", padL, padT + ih + 16);
+          ctx.textAlign = "right";
+          ctx.fillText((dmax / 1000).toFixed(1) + " km", padL + iw, padT + ih + 16);
+          ctx.textAlign = "right";
+          ctx.textBaseline = "middle";
+          ctx.fillText(Math.round(emax) + " m", padL - 6, padT + 8);
+          ctx.fillText(Math.round(emin) + " m", padL - 6, padT + ih - 4);
+          if (alongM != null && isFinite(alongM) && dmax > 0) {
+            var clampD = Math.max(0, Math.min(alongM, dmax));
+            var xe = xOf(clampD);
+            var ee = elevationAtDistance(clampD);
+            if (ee != null && isFinite(ee)) {
+              var ye = yOf(ee);
+              ctx.beginPath();
+              ctx.strokeStyle = "rgba(232, 132, 26, 0.45)";
+              ctx.lineWidth = 1;
+              ctx.setLineDash([4, 3]);
+              ctx.moveTo(xe, padT);
+              ctx.lineTo(xe, padT + ih);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.beginPath();
+              ctx.fillStyle = "#e8841a";
+              ctx.strokeStyle = "#8a4b12";
+              ctx.lineWidth = 2;
+              ctx.arc(xe, ye, 6, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
           }
         }
 
@@ -546,6 +996,14 @@
           addOtmTiles(trackMap);
           photoMap = L.map("map-photo", { zoomControl: true });
           addOtmTiles(photoMap);
+
+          if (trackCoords.length >= 2) {
+            photoTrackLine = L.polyline(trackCoords, {
+              color: "#2f6f7a",
+              weight: 3,
+              opacity: 0.75,
+            }).addTo(photoMap);
+          }
 
           trackMarker = L.circleMarker([0, 0], {
             radius: 9,
@@ -578,7 +1036,7 @@
           }
         }
 
-        function applyFilter() {
+        async function applyFilter() {
           const q = searchEl.value.trim().toLowerCase();
           if (!q) {
             filtered = photos.slice();
@@ -592,9 +1050,17 @@
           }
           renderList();
           if (filtered.length === 0) {
+            await persistNotesForCurrentSelection();
             selected = null;
             photoEl.removeAttribute("src");
             metaEl.textContent = "No rows match the filter.";
+            var notesTa = document.getElementById("photo-notes");
+            if (notesTa) {
+              notesTa.value = "";
+            }
+            setNotesStatus("", null);
+            lastElevationAlongM = null;
+            drawElevationProfile(null);
             destroyMaps();
             return;
           }
@@ -602,7 +1068,7 @@
           if (idx < 0) {
             idx = 0;
           }
-          selectByFilteredIndex(idx);
+          await selectByFilteredIndex(idx);
         }
 
         function renderList() {
@@ -619,7 +1085,7 @@
               esc(p.taken_at) +
               "</div>";
             btn.addEventListener("click", function () {
-              selectByFilteredIndex(i);
+              void selectByFilteredIndex(i).catch(function () {});
             });
             li.appendChild(btn);
             listEl.appendChild(li);
@@ -664,15 +1130,17 @@
           return true;
         }
 
-        function selectByFilteredIndex(i) {
+        async function selectByFilteredIndex(i) {
           if (i < 0 || i >= filtered.length) {
             return;
           }
+          await persistNotesForCurrentSelection();
           selected = filtered[i];
           var p = selected;
           photoEl.alt = p.filename;
           photoEl.src = "/media/" + encodeURIComponent(p.filename);
           renderMeta(p);
+          syncNotesFromSelection();
           ensureMaps();
           var lat = Number(p.latitude);
           var lon = Number(p.longitude);
@@ -684,6 +1152,8 @@
           photoMarker.setLatLng(ll);
           photoMarker.addTo(photoMap);
           photoMap.setView(ll, 17, { animate: true });
+
+          updateElevationForSelection(lat, lon);
 
           syncListSelection();
           blurListFocusIfNeeded();
@@ -733,11 +1203,11 @@
             idx = Math.max(0, idx - 1);
           }
           listPanel.classList.add("list-keyboard-moved");
-          selectByFilteredIndex(idx);
+          void selectByFilteredIndex(idx).catch(function () {});
         });
 
         searchEl.addEventListener("input", function () {
-          applyFilter();
+          void applyFilter().catch(function () {});
         });
 
         window.addEventListener("resize", function () {
@@ -751,19 +1221,27 @@
             }
             return r.json();
           }),
-          fetch("/api/track").then(function (r) {
+          fetch("/api/track-profile").then(function (r) {
             if (!r.ok) {
-              throw new Error("track: " + r.statusText);
+              throw new Error("track-profile: " + r.statusText);
             }
             return r.json();
           }),
         ])
           .then(function (pair) {
             var data = pair[0];
-            var track = pair[1];
+            var prof = pair[1];
             photos = Array.isArray(data) ? data : [];
             trackCoords =
-              track && Array.isArray(track.coordinates) ? track.coordinates : [];
+              prof && Array.isArray(prof.coordinates) ? prof.coordinates : [];
+            profileDist =
+              prof && Array.isArray(prof.distances_m) ? prof.distances_m : [];
+            profileEle =
+              prof && Array.isArray(prof.elevations_m) ? prof.elevations_m : [];
+            profileTotalM =
+              prof && typeof prof.total_distance_m === "number"
+                ? prof.total_distance_m
+                : 0;
             countLabel.textContent =
               photos.length === 0
                 ? "No records in survey_photos.yaml"
@@ -777,13 +1255,40 @@
             mainEl.hidden = false;
             filtered = photos.slice();
             renderList();
-            selectByFilteredIndex(0);
-            setTimeout(invalidateMaps, 200);
+            void selectByFilteredIndex(0).catch(function () {});
+            setTimeout(function () {
+              invalidateMaps();
+              var ew = document.querySelector(".elevation-wrap");
+              if (ew && !ew.dataset.elevRO) {
+                ew.dataset.elevRO = "1";
+                if (typeof ResizeObserver !== "undefined") {
+                  new ResizeObserver(function () {
+                    drawElevationProfile(lastElevationAlongM);
+                  }).observe(ew);
+                }
+              }
+            }, 200);
           })
           .catch(function (e) {
             emptyEl.hidden = false;
             emptyEl.textContent = "Could not load data: " + e.message;
           });
+
+        (function bindPhotoNotesEditor() {
+          var ta = document.getElementById("photo-notes");
+          if (!ta || ta.dataset.boundNotes === "1") {
+            return;
+          }
+          ta.dataset.boundNotes = "1";
+          ta.addEventListener("input", scheduleNotesDebouncedSave);
+          ta.addEventListener("blur", function () {
+            if (notesDebounceTimer) {
+              clearTimeout(notesDebounceTimer);
+              notesDebounceTimer = null;
+            }
+            void persistNotesForCurrentSelection();
+          });
+        })();
       })();
     </script>
   </body>
