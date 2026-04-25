@@ -1,0 +1,9 @@
+services:
+  survey-viewer:
+    build: .
+    ports:
+      - "8765:8000"
+    volumes:
+      - ./survey_photos.yaml:/work/survey_photos.yaml:ro
+      - ./photos:/work/photos:ro
+      - ./track:/work/track:ro

@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Survey photos</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      :root {
+        --bg: #f4f2ef;
+        --panel: #fff;
+        --border: #d9d4cd;
+        --text: #1c1b19;
+        --muted: #5c5852;
+        --accent: #2f6f7a;
+        --accent-soft: #e8f2f3;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        flex: 0 0 auto;
+        padding: 0.65rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        align-items: baseline;
+        gap: 0.75rem;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      header span {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      main {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+      }
+      #list-panel {
+        width: min(380px, 38vw);
+        min-width: 240px;
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
+      }
+      #list-panel label {
+        padding: 0.5rem 0.75rem 0.25rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      #search {
+        margin: 0 0.75rem 0.5rem;
+        padding: 0.45rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: inherit;
+      }
+      #list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        overflow-y: auto;
+        flex: 1;
+      }
+      #list li button {
+        width: 100%;
+        text-align: left;
+        border: none;
+        border-bottom: 1px solid var(--border);
+        background: transparent;
+        padding: 0.55rem 0.75rem;
+        cursor: pointer;
+        font: inherit;
+        color: inherit;
+      }
+      #list li:not(.is-selected) button:hover {
+        background: var(--accent-soft);
+      }
+      #list li.is-selected button {
+        background: var(--accent-soft);
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+      /* After arrow-key navigation, the pointer can still sit on another row; that
+         row would still match :hover. Suppress hover styling until the pointer
+         moves or the user clicks in the list again. */
+      #list-panel.list-keyboard-moved #list li:not(.is-selected) button:hover {
+        background: transparent;
+      }
+      .li-title {
+        font-size: 0.82rem;
+        font-weight: 500;
+        word-break: break-all;
+      }
+      .li-meta {
+        font-size: 0.72rem;
+        color: var(--muted);
+        margin-top: 0.15rem;
+      }
+      #detail {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 0.75rem;
+        gap: 0.75rem;
+      }
+      #meta-block {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.65rem 0.85rem;
+        font-size: 0.85rem;
+        line-height: 1.45;
+      }
+      #meta-block dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: 7.5rem 1fr;
+        gap: 0.25rem 0.5rem;
+      }
+      #meta-block dt {
+        margin: 0;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      #meta-block dd {
+        margin: 0;
+        word-break: break-word;
+      }
+      #meta-block .lon-num {
+        margin-right: 0.15rem;
+      }
+      #meta-block .copy-row {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.4rem;
+        margin-left: 0.35rem;
+        vertical-align: middle;
+      }
+      #meta-block #copy-fmt-select {
+        font: inherit;
+        font-size: 0.78rem;
+        padding: 0.22rem 0.4rem;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: #fff;
+        color: var(--text);
+        max-width: min(100%, 17rem);
+      }
+      #meta-block #copy-coords-btn {
+        font: inherit;
+        font-size: 0.78rem;
+        padding: 0.22rem 0.55rem;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        background: #faf9f7;
+        color: var(--text);
+        cursor: pointer;
+      }
+      #meta-block #copy-coords-btn:hover {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+      }
+      #meta-block #copy-coords-btn.was-copied {
+        background: #e3f2e6;
+        border-color: #5a9a62;
+      }
+      #visuals {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: minmax(220px, 1fr) minmax(220px, 1fr);
+        gap: 0.75rem;
+      }
+      .photo-card {
+        grid-column: 1;
+        grid-row: 1 / -1;
+      }
+      .map-track-card {
+        grid-column: 2;
+        grid-row: 1;
+      }
+      .map-photo-card {
+        grid-column: 2;
+        grid-row: 2;
+      }
+      @media (max-width: 900px) {
+        main {
+          flex-direction: column;
+        }
+        #list-panel {
+          width: 100%;
+          min-width: 0;
+          max-height: 36vh;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+        #visuals {
+          grid-template-columns: 1fr;
+          grid-template-rows: none;
+        }
+        .photo-card {
+          grid-column: 1;
+          grid-row: auto;
+        }
+        .map-track-card,
+        .map-photo-card {
+          grid-column: 1;
+          grid-row: auto;
+        }
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .card h2 {
+        margin: 0;
+        padding: 0.45rem 0.65rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+        background: #faf9f7;
+      }
+      #photo-wrap {
+        flex: 1;
+        min-height: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #eae8e4;
+      }
+      #photo {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      .map-host {
+        flex: 1;
+        min-height: 220px;
+      }
+      #empty {
+        padding: 2rem;
+        text-align: center;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Mojave survey photos</h1>
+      <span id="count-label"></span>
+    </header>
+    <main id="main" hidden>
+      <aside id="list-panel">
+        <label for="search">Filter</label>
+        <input id="search" type="search" placeholder="Filename or time…" autocomplete="off" />
+        <ul id="list"></ul>
+      </aside>
+      <section id="detail">
+        <div id="meta-block"></div>
+        <div id="visuals">
+          <div class="card photo-card">
+            <h2>Photo</h2>
+            <div id="photo-wrap">
+              <img id="photo" alt="" />
+            </div>
+          </div>
+          <div class="card map-track-card">
+            <h2>Survey track</h2>
+            <div id="map-track" class="map-host" role="presentation"></div>
+          </div>
+          <div class="card map-photo-card">
+            <h2>Photo location</h2>
+            <div id="map-photo" class="map-host" role="presentation"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="empty" hidden></div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script>
+      (function () {
+        const listEl = document.getElementById("list");
+        const listPanel = document.getElementById("list-panel");
+        const searchEl = document.getElementById("search");
+        const photoEl = document.getElementById("photo");
+        const metaEl = document.getElementById("meta-block");
+        const countLabel = document.getElementById("count-label");
+        const mainEl = document.getElementById("main");
+        const emptyEl = document.getElementById("empty");
+
+        const ATTRIB_OTM =
+          'Map: © <a href="https://opentopomap.org">OpenTopoMap</a> ' +
+          '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>) ' +
+          '· Data: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+
+        const COPY_FMT_STORAGE_KEY = "mhcgHitwSurveyCopyCoordFmt";
+        const COPY_FMT_OPTIONS = [
+          ["decimal", "Decimal (lat, lon)"],
+          ["dms", "DMS (hemisphere)"],
+          ["geo", "Geo URI"],
+          ["signed", "Signed compact"],
+          ["tab", "Tab-separated (spreadsheet)"],
+          ["lines", "Two lines (lat then lon)"],
+        ];
+
+        let photos = [];
+        let filtered = [];
+        let selected = null;
+        let trackCoords = [];
+        let trackMap = null;
+        let photoMap = null;
+        let trackLine = null;
+        let trackMarker = null;
+        let photoMarker = null;
+
+        function esc(s) {
+          const d = document.createElement("div");
+          d.textContent = s;
+          return d.innerHTML;
+        }
+
+        function fmtDmsSeconds(sec) {
+          var t = sec.toFixed(2).replace(/\.?0+$/, "");
+          return t === "" ? "0" : t;
+        }
+
+        function decimalToDmsHemisphere(value, isLatitude) {
+          var abs = Math.abs(value);
+          var deg = Math.floor(abs + 1e-12);
+          var minFloat = (abs - deg) * 60;
+          var min = Math.floor(minFloat + 1e-12);
+          var sec = (minFloat - min) * 60;
+          var hemi = isLatitude
+            ? value >= 0
+              ? "N"
+              : "S"
+            : value >= 0
+              ? "E"
+              : "W";
+          return deg + "°" + min + "'" + fmtDmsSeconds(sec) + '" ' + hemi;
+        }
+
+        function getStoredCopyFmt() {
+          try {
+            var v = localStorage.getItem(COPY_FMT_STORAGE_KEY);
+            if (v && COPY_FMT_OPTIONS.some(function (o) { return o[0] === v; })) {
+              return v;
+            }
+          } catch (e) {}
+          return "decimal";
+        }
+
+        function persistCopyFmt(value) {
+          try {
+            if (COPY_FMT_OPTIONS.some(function (o) { return o[0] === value; })) {
+              localStorage.setItem(COPY_FMT_STORAGE_KEY, value);
+            }
+          } catch (e) {}
+        }
+
+        function buildCopyPayload(fmt, lat, lon) {
+          var la = Number(lat);
+          var lo = Number(lon);
+          if (!isFinite(la) || !isFinite(lo)) {
+            return "";
+          }
+          switch (fmt) {
+            case "decimal":
+              return la + ", " + lo;
+            case "dms":
+              return decimalToDmsHemisphere(la, true) + ", " + decimalToDmsHemisphere(lo, false);
+            case "geo":
+              return "geo:" + la + "," + lo;
+            case "signed":
+              return (la >= 0 ? "+" : "") + la + (lo >= 0 ? "+" : "") + lo;
+            case "tab":
+              return la + "\t" + lo;
+            case "lines":
+              return la + "\n" + lo;
+            default:
+              return "";
+          }
+        }
+
+        function copyToClipboard(text) {
+          if (!text) {
+            return Promise.reject();
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text);
+          }
+          return new Promise(function (resolve, reject) {
+            var ta = document.createElement("textarea");
+            ta.value = text;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+              document.execCommand("copy");
+              resolve();
+            } catch (err) {
+              reject(err);
+            } finally {
+              document.body.removeChild(ta);
+            }
+          });
+        }
+
+        function renderMeta(p) {
+          var storedFmt = getStoredCopyFmt();
+          var optionsHtml = COPY_FMT_OPTIONS.map(function (pair) {
+            var id = pair[0];
+            var sel = id === storedFmt ? ' selected="selected"' : "";
+            return '<option value="' + id + '"' + sel + ">" + esc(pair[1]) + "</option>";
+          }).join("");
+          metaEl.innerHTML =
+            "<dl>" +
+            "<dt>Filename</dt><dd>" +
+            esc(p.filename) +
+            "</dd>" +
+            "<dt>Taken</dt><dd>" +
+            esc(p.taken_at) +
+            "</dd>" +
+            "<dt>Latitude</dt><dd>" +
+            esc(String(p.latitude)) +
+            "</dd>" +
+            "<dt>Longitude</dt><dd>" +
+            '<span class="lon-num">' +
+            esc(String(p.longitude)) +
+            '</span><span class="copy-row">' +
+            '<select id="copy-fmt-select" aria-label="Coordinate format for copy">' +
+            optionsHtml +
+            "</select>" +
+            '<button type="button" id="copy-coords-btn" title="Copy coordinates in the selected format">Copy</button>' +
+            "</span></dd>" +
+            "</dl>";
+        }
+
+        metaEl.addEventListener("change", function (e) {
+          if (e.target.id !== "copy-fmt-select") {
+            return;
+          }
+          persistCopyFmt(e.target.value);
+        });
+
+        metaEl.addEventListener("click", function (e) {
+          var btn = e.target.closest("#copy-coords-btn");
+          if (!btn || !metaEl.contains(btn)) {
+            return;
+          }
+          if (!selected) {
+            return;
+          }
+          var sel = metaEl.querySelector("#copy-fmt-select");
+          var fmt = sel ? sel.value : getStoredCopyFmt();
+          var text = buildCopyPayload(fmt, selected.latitude, selected.longitude);
+          copyToClipboard(text).then(
+            function () {
+              btn.classList.add("was-copied");
+              window.setTimeout(function () {
+                btn.classList.remove("was-copied");
+              }, 1400);
+            },
+            function () {
+              window.alert("Could not copy to the clipboard.");
+            }
+          );
+        });
+
+        function addOtmTiles(map) {
+          L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+            maxZoom: 17,
+            attribution: ATTRIB_OTM,
+          }).addTo(map);
+        }
+
+        function destroyMaps() {
+          if (trackMap) {
+            trackMap.remove();
+            trackMap = null;
+          }
+          if (photoMap) {
+            photoMap.remove();
+            photoMap = null;
+          }
+          trackLine = null;
+          trackMarker = null;
+          photoMarker = null;
+        }
+
+        function invalidateMaps() {
+          if (trackMap) {
+            trackMap.invalidateSize();
+          }
+          if (photoMap) {
+            photoMap.invalidateSize();
+          }
+        }
+
+        function ensureMaps() {
+          if (trackMap && photoMap) {
+            return;
+          }
+          destroyMaps();
+          trackMap = L.map("map-track", { zoomControl: true });
+          addOtmTiles(trackMap);
+          photoMap = L.map("map-photo", { zoomControl: true });
+          addOtmTiles(photoMap);
+
+          trackMarker = L.circleMarker([0, 0], {
+            radius: 9,
+            color: "#8a4b12",
+            weight: 2,
+            fillColor: "#e8841a",
+            fillOpacity: 0.95,
+          }).addTo(trackMap);
+
+          photoMarker = L.circleMarker([0, 0], {
+            radius: 10,
+            color: "#1c4f57",
+            weight: 2,
+            fillColor: "#2f6f7a",
+            fillOpacity: 0.95,
+          }).addTo(photoMap);
+
+          if (trackCoords.length >= 2) {
+            trackLine = L.polyline(trackCoords, {
+              color: "#2f6f7a",
+              weight: 4,
+              opacity: 0.88,
+            }).addTo(trackMap);
+            trackMap.fitBounds(trackLine.getBounds(), {
+              padding: [28, 28],
+              maxZoom: 15,
+            });
+          } else {
+            trackMap.setView([35.08, -115.42], 12);
+          }
+        }
+
+        function applyFilter() {
+          const q = searchEl.value.trim().toLowerCase();
+          if (!q) {
+            filtered = photos.slice();
+          } else {
+            filtered = photos.filter(function (p) {
+              return (
+                p.filename.toLowerCase().indexOf(q) !== -1 ||
+                String(p.taken_at).toLowerCase().indexOf(q) !== -1
+              );
+            });
+          }
+          renderList();
+          if (filtered.length === 0) {
+            selected = null;
+            photoEl.removeAttribute("src");
+            metaEl.textContent = "No rows match the filter.";
+            destroyMaps();
+            return;
+          }
+          var idx = selected ? filtered.indexOf(selected) : -1;
+          if (idx < 0) {
+            idx = 0;
+          }
+          selectByFilteredIndex(idx);
+        }
+
+        function renderList() {
+          listEl.innerHTML = "";
+          filtered.forEach(function (p, i) {
+            var li = document.createElement("li");
+            li.dataset.filename = p.filename;
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.innerHTML =
+              '<div class="li-title">' +
+              esc(p.filename) +
+              '</div><div class="li-meta">' +
+              esc(p.taken_at) +
+              "</div>";
+            btn.addEventListener("click", function () {
+              selectByFilteredIndex(i);
+            });
+            li.appendChild(btn);
+            listEl.appendChild(li);
+          });
+          syncListSelection();
+        }
+
+        function syncListSelection() {
+          listEl.querySelectorAll("li").forEach(function (li) {
+            li.classList.toggle(
+              "is-selected",
+              !!(selected && li.dataset.filename === selected.filename)
+            );
+          });
+        }
+
+        function blurListFocusIfNeeded() {
+          var ae = document.activeElement;
+          if (ae && listEl.contains(ae)) {
+            ae.blur();
+          }
+        }
+
+        function scrollSelectedListItemIntoView() {
+          var li = listEl.querySelector("li.is-selected");
+          if (li) {
+            li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          }
+        }
+
+        function keyboardTargetAllowsListArrows(target) {
+          if (!target || !target.tagName) {
+            return true;
+          }
+          var tag = target.tagName;
+          if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+            return false;
+          }
+          if (target.closest && target.closest(".leaflet-container")) {
+            return false;
+          }
+          return true;
+        }
+
+        function selectByFilteredIndex(i) {
+          if (i < 0 || i >= filtered.length) {
+            return;
+          }
+          selected = filtered[i];
+          var p = selected;
+          photoEl.alt = p.filename;
+          photoEl.src = "/media/" + encodeURIComponent(p.filename);
+          renderMeta(p);
+          ensureMaps();
+          var lat = Number(p.latitude);
+          var lon = Number(p.longitude);
+          var ll = [lat, lon];
+
+          trackMarker.setLatLng(ll);
+          trackMarker.addTo(trackMap);
+
+          photoMarker.setLatLng(ll);
+          photoMarker.addTo(photoMap);
+          photoMap.setView(ll, 17, { animate: true });
+
+          syncListSelection();
+          blurListFocusIfNeeded();
+          scrollSelectedListItemIntoView();
+          requestAnimationFrame(function () {
+            setTimeout(invalidateMaps, 50);
+          });
+        }
+
+        function clearListKeyboardMoved() {
+          listPanel.classList.remove("list-keyboard-moved");
+        }
+
+        listPanel.addEventListener(
+          "mousemove",
+          function () {
+            clearListKeyboardMoved();
+          },
+          { passive: true }
+        );
+        listPanel.addEventListener(
+          "mousedown",
+          function () {
+            clearListKeyboardMoved();
+          },
+          { passive: true }
+        );
+
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "ArrowDown" && e.key !== "ArrowUp") {
+            return;
+          }
+          if (mainEl.hidden || filtered.length === 0) {
+            return;
+          }
+          if (!keyboardTargetAllowsListArrows(e.target)) {
+            return;
+          }
+          e.preventDefault();
+          var idx = selected ? filtered.indexOf(selected) : 0;
+          if (idx < 0) {
+            idx = 0;
+          }
+          if (e.key === "ArrowDown") {
+            idx = Math.min(filtered.length - 1, idx + 1);
+          } else {
+            idx = Math.max(0, idx - 1);
+          }
+          listPanel.classList.add("list-keyboard-moved");
+          selectByFilteredIndex(idx);
+        });
+
+        searchEl.addEventListener("input", function () {
+          applyFilter();
+        });
+
+        window.addEventListener("resize", function () {
+          invalidateMaps();
+        });
+
+        Promise.all([
+          fetch("/api/photos").then(function (r) {
+            if (!r.ok) {
+              throw new Error("photos: " + r.statusText);
+            }
+            return r.json();
+          }),
+          fetch("/api/track").then(function (r) {
+            if (!r.ok) {
+              throw new Error("track: " + r.statusText);
+            }
+            return r.json();
+          }),
+        ])
+          .then(function (pair) {
+            var data = pair[0];
+            var track = pair[1];
+            photos = Array.isArray(data) ? data : [];
+            trackCoords =
+              track && Array.isArray(track.coordinates) ? track.coordinates : [];
+            countLabel.textContent =
+              photos.length === 0
+                ? "No records in survey_photos.yaml"
+                : photos.length + " photo" + (photos.length === 1 ? "" : "s");
+            if (photos.length === 0) {
+              emptyEl.hidden = false;
+              emptyEl.textContent =
+                "No photos loaded. Generate survey_photos.yaml and ensure this app is run from the repo root.";
+              return;
+            }
+            mainEl.hidden = false;
+            filtered = photos.slice();
+            renderList();
+            selectByFilteredIndex(0);
+            setTimeout(invalidateMaps, 200);
+          })
+          .catch(function (e) {
+            emptyEl.hidden = false;
+            emptyEl.textContent = "Could not load data: " + e.message;
+          });
+      })();
+    </script>
+  </body>
+</html>
