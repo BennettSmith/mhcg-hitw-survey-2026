@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PHOTOS_DIR = (ROOT / "photos").resolve()
 TRACK_DIR = (ROOT / "track").resolve()
 GPX_PATH = (TRACK_DIR / "MHCG-HITW-SURVEY.gpx").resolve()
+PINS_GPX_PATH = (TRACK_DIR / "MHCG-HITW-PINS.gpx").resolve()
 YAML_PATH = ROOT / "survey_photos.yaml"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -35,8 +36,69 @@ app = FastAPI(title="Survey photo viewer")
 _photos_cache: list[dict] | None = None
 _track_cache: list[list[float]] | None = None
 _profile_cache: dict | None = None
+_pins_cache: list[dict] | None = None
 
 _EARTH_RADIUS_M = 6_371_000.0
+
+
+def _gpx_local_tag(el: ET.Element) -> str:
+    return el.tag.split("}")[-1]
+
+
+def _parse_gpx_waypoints(path: Path) -> list[dict]:
+    """
+    Parse GPX <wpt> for ranger / trail notes (name = note text).
+    Only files directly under ./track are accepted.
+    """
+    if not path.is_file() or path.parent.resolve() != TRACK_DIR:
+        return []
+    tree = ET.parse(path)
+    root = tree.getroot()
+    out: list[dict] = []
+    for el in root.iter():
+        if _gpx_local_tag(el) != "wpt":
+            continue
+        lat_s, lon_s = el.get("lat"), el.get("lon")
+        if lat_s is None or lon_s is None:
+            continue
+        try:
+            lat, lon = float(lat_s), float(lon_s)
+        except ValueError:
+            continue
+        name = ""
+        taken_at: str | None = None
+        elevation_m: float | None = None
+        for child in el:
+            tag = _gpx_local_tag(child)
+            if tag == "name" and child.text:
+                name = child.text.strip()
+            elif tag == "time" and child.text:
+                taken_at = child.text.strip()
+            elif tag == "ele" and child.text:
+                try:
+                    elevation_m = float(child.text.strip())
+                except ValueError:
+                    elevation_m = None
+        pin_index = len(out)
+        out.append(
+            {
+                "name": name or "(unnamed waypoint)",
+                "latitude": lat,
+                "longitude": lon,
+                "taken_at": taken_at,
+                "elevation_m": elevation_m,
+                "pin_index": pin_index,
+            }
+        )
+    return out
+
+
+def _load_pins() -> list[dict]:
+    global _pins_cache
+    if _pins_cache is not None:
+        return _pins_cache
+    _pins_cache = _parse_gpx_waypoints(PINS_GPX_PATH)
+    return _pins_cache
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -190,6 +252,12 @@ def api_track_profile() -> dict:
     GPX track with cumulative horizontal distance (m) and elevation (m) per vertex.
     """
     return _load_track_profile()
+
+
+@app.get("/api/pins")
+def api_pins() -> list[dict]:
+    """Waypoints from track/MHCG-HITW-PINS.gpx (ranger notes along the trail)."""
+    return _load_pins()
 
 
 @app.get("/media/{filename}")
