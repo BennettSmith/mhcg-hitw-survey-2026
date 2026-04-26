@@ -38,6 +38,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 PHOTO_REMOTE_BASE_URL = os.environ.get("PHOTO_REMOTE_BASE_URL", "").rstrip("/")
 PHOTO_CACHE_DIR = Path(os.environ.get("PHOTO_CACHE_DIR", "/tmp/survey-photo-cache")).resolve()
 PHOTO_DOWNLOAD_TIMEOUT_SECONDS = 30
+NOTES_READ_ONLY = os.environ.get("NOTES_READ_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI(title="Survey photo viewer")
 _photos_cache: list[dict] | None = None
@@ -322,9 +323,16 @@ def api_photos() -> list[dict]:
     return [_with_photo_media_info(row) for row in _load_photos()]
 
 
+@app.get("/api/config")
+def api_config() -> dict:
+    return {"notes_read_only": NOTES_READ_ONLY}
+
+
 @app.put("/api/photos/{filename}/notes")
 def put_photo_notes(filename: str, body: PhotoNotesBody) -> dict:
     """Persist field notes for one photo in survey_photos.yaml (basename only)."""
+    if NOTES_READ_ONLY:
+        raise HTTPException(status_code=403, detail="Notes are read-only in this deployment")
     name = Path(filename).name
     if name != filename or not name or name.startswith("."):
         raise HTTPException(status_code=400, detail="Invalid filename")

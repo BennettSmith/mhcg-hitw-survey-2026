@@ -15,3 +15,5 @@ services:
         value: https://raw.githubusercontent.com/BennettSmith/mhcg-hitw-survey-2026/533d94246461cfaac1d57c10394513262fa74727/photos
       - key: PHOTO_CACHE_DIR
         value: /tmp/survey-photo-cache
+      - key: NOTES_READ_ONLY
+        value: "true"

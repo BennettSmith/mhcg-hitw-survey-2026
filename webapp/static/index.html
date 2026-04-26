@@ -454,6 +454,11 @@
         outline: 2px solid var(--accent);
         outline-offset: 1px;
       }
+      #photo-notes[readonly] {
+        background: #f3f1ee;
+        color: var(--muted);
+        cursor: default;
+      }
       .notes-status {
         font-size: 0.72rem;
         min-height: 1.15em;
@@ -681,6 +686,7 @@
         const PHOTO_MAP_DEFAULT_ZOOM = 17;
         let trackBasemap = "sat";
         let photoBasemap = "sat";
+        let notesReadOnly = false;
         var lightboxOpen = false;
         var lightboxBaseScale = 1;
         var lightboxScale = 1;
@@ -730,7 +736,7 @@
         }
 
         function persistNotesForCurrentSelection() {
-          if (!selected || selected.kind !== "photo") {
+          if (!selected || selected.kind !== "photo" || notesReadOnly) {
             return Promise.resolve();
           }
           var ta = document.getElementById("photo-notes");
@@ -774,15 +780,18 @@
           if (selected.kind === "pin") {
             ta.value = "";
             ta.disabled = true;
+            ta.readOnly = false;
             ta.placeholder = "Notes are saved only for survey photos (YAML).";
             setNotesStatus("", null);
             return;
           }
           ta.disabled = false;
-          ta.placeholder =
-            "Observations for this spot (saved to survey_photos.yaml)…";
+          ta.readOnly = notesReadOnly;
+          ta.placeholder = notesReadOnly
+            ? "Notes are read-only in this deployment."
+            : "Observations for this spot (saved to survey_photos.yaml)…";
           ta.value = selected.notes == null ? "" : String(selected.notes);
-          setNotesStatus("", null);
+          setNotesStatus(notesReadOnly ? "Read-only" : "", notesReadOnly ? true : null);
         }
 
         function esc(s) {
@@ -2210,11 +2219,19 @@
             }
             return r.json();
           }),
+          fetch("/api/config").then(function (r) {
+            if (!r.ok) {
+              return {};
+            }
+            return r.json();
+          }),
         ])
           .then(function (triple) {
             var data = triple[0];
             var prof = triple[1];
             var pinsRaw = triple[2];
+            var configRaw = triple[3] || {};
+            notesReadOnly = !!configRaw.notes_read_only;
             photos = Array.isArray(data) ? data : [];
             pinList = Array.isArray(pinsRaw) ? pinsRaw : [];
             trackCoords =
