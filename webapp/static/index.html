@@ -50,6 +50,28 @@
         font-size: 0.8rem;
         color: var(--muted);
       }
+      .header-actions {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+      }
+      .header-actions a {
+        font: inherit;
+        font-size: 0.74rem;
+        line-height: 1.1;
+        padding: 0.24rem 0.55rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #faf9f7;
+        color: var(--text);
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .header-actions a:hover {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+      }
       main {
         flex: 1;
         min-height: 0;
@@ -570,6 +592,9 @@
     <header>
       <h1>Mojave survey photos</h1>
       <span id="count-label"></span>
+      <span class="header-actions">
+        <a href="/survey.kml" target="_blank" rel="noopener" title="Open or download a KML with the survey track, photo locations, and ranger pins">KML for Earth</a>
+      </span>
     </header>
     <main id="main" hidden>
       <aside id="list-panel">

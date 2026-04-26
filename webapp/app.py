@@ -24,8 +24,8 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import yaml
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -309,6 +309,103 @@ def _load_photos() -> list[dict]:
     return _photos_cache
 
 
+def _kml_text_node(parent: ET.Element, tag: str, text: object) -> ET.Element:
+    child = ET.SubElement(parent, tag)
+    child.text = "" if text is None else str(text)
+    return child
+
+
+def _photo_link_for_kml(request: FastAPIRequest, filename: str) -> str:
+    name = Path(filename).name
+    return _remote_photo_url(name) or str(request.url_for("media", filename=name))
+
+
+def _build_survey_kml(request: FastAPIRequest) -> bytes:
+    kml = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+    doc = ET.SubElement(kml, "Document")
+    _kml_text_node(doc, "name", "MHCG HITW Survey 2026")
+
+    track_style = ET.SubElement(doc, "Style", id="survey-track")
+    line_style = ET.SubElement(track_style, "LineStyle")
+    _kml_text_node(line_style, "color", "ff7a6f2f")
+    _kml_text_node(line_style, "width", "4")
+
+    photo_style = ET.SubElement(doc, "Style", id="photo-pin")
+    icon_style = ET.SubElement(photo_style, "IconStyle")
+    _kml_text_node(icon_style, "color", "ff7a6f2f")
+    _kml_text_node(icon_style, "scale", "1.1")
+
+    ranger_style = ET.SubElement(doc, "Style", id="ranger-pin")
+    ranger_icon = ET.SubElement(ranger_style, "IconStyle")
+    _kml_text_node(ranger_icon, "color", "ff2019d7")
+    _kml_text_node(ranger_icon, "scale", "1.1")
+
+    profile = _load_track_profile()
+    coords = profile.get("coordinates") or []
+    elevations = profile.get("elevations_m") or []
+    if len(coords) >= 2:
+        placemark = ET.SubElement(doc, "Placemark")
+        _kml_text_node(placemark, "name", "Survey track")
+        _kml_text_node(placemark, "styleUrl", "#survey-track")
+        line = ET.SubElement(placemark, "LineString")
+        _kml_text_node(line, "tessellate", "1")
+        coord_parts: list[str] = []
+        for i, pair in enumerate(coords):
+            lat, lon = pair
+            ele = elevations[i] if i < len(elevations) and not math.isnan(elevations[i]) else 0
+            coord_parts.append(f"{lon},{lat},{ele}")
+        _kml_text_node(line, "coordinates", " ".join(coord_parts))
+
+    photos_folder = ET.SubElement(doc, "Folder")
+    _kml_text_node(photos_folder, "name", "Photo locations")
+    for row in _load_photos():
+        filename = str(row.get("filename") or "")
+        lat = row.get("latitude")
+        lon = row.get("longitude")
+        if lat is None or lon is None:
+            continue
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            continue
+        photo_url = _photo_link_for_kml(request, filename)
+        placemark = ET.SubElement(photos_folder, "Placemark")
+        _kml_text_node(placemark, "name", filename)
+        _kml_text_node(placemark, "styleUrl", "#photo-pin")
+        description = (
+            f"Taken: {row.get('taken_at') or ''}<br/>"
+            f'<a href="{photo_url}">Open photo</a><br/>'
+            f"{row.get('notes') or ''}"
+        )
+        _kml_text_node(placemark, "description", description)
+        point = ET.SubElement(placemark, "Point")
+        _kml_text_node(point, "coordinates", f"{lon_f},{lat_f},0")
+
+    ranger_folder = ET.SubElement(doc, "Folder")
+    _kml_text_node(ranger_folder, "name", "Ranger pins")
+    for pin in _load_pins():
+        lat = pin.get("latitude")
+        lon = pin.get("longitude")
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            continue
+        placemark = ET.SubElement(ranger_folder, "Placemark")
+        _kml_text_node(placemark, "name", pin.get("name") or "Ranger pin")
+        _kml_text_node(placemark, "styleUrl", "#ranger-pin")
+        description = f"Time: {pin.get('taken_at') or ''}"
+        if pin.get("elevation_m") is not None:
+            description += f"<br/>Elevation: {pin.get('elevation_m')} m"
+        _kml_text_node(placemark, "description", description)
+        point = ET.SubElement(placemark, "Point")
+        _kml_text_node(point, "coordinates", f"{lon_f},{lat_f},0")
+
+    ET.indent(kml, space="  ")
+    return ET.tostring(kml, encoding="utf-8", xml_declaration=True)
+
+
 def invalidate_photos_cache() -> None:
     global _photos_cache
     _photos_cache = None
@@ -376,6 +473,16 @@ def api_track_profile() -> dict:
 def api_pins() -> list[dict]:
     """Waypoints from track/MHCG-HITW-PINS.gpx (ranger notes along the trail)."""
     return _load_pins()
+
+
+@app.get("/survey.kml")
+def survey_kml(request: FastAPIRequest) -> Response:
+    headers = {"Content-Disposition": 'inline; filename="mhcg-hitw-survey-2026.kml"'}
+    return Response(
+        _build_survey_kml(request),
+        media_type="application/vnd.google-earth.kml+xml",
+        headers=headers,
+    )
 
 
 @app.get("/media/{filename}")
