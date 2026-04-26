@@ -15,6 +15,7 @@ Docker (from repo root):
 
 from __future__ import annotations
 
+import html
 import math
 import os
 import shutil
@@ -320,6 +321,23 @@ def _photo_link_for_kml(request: FastAPIRequest, filename: str) -> str:
     return _remote_photo_url(name) or str(request.url_for("media", filename=name))
 
 
+def _photo_description_for_kml(row: dict, photo_url: str) -> str:
+    filename = html.escape(str(row.get("filename") or "Photo"))
+    taken_at = html.escape(str(row.get("taken_at") or ""))
+    notes = html.escape(str(row.get("notes") or "")).replace("\n", "<br/>")
+    photo_url_attr = html.escape(photo_url, quote=True)
+    parts = [
+        f"<h2>{filename}</h2>",
+        f'<p><a href="{photo_url_attr}">Open full photo</a></p>',
+        f'<p><img src="{photo_url_attr}" alt="{filename}" width="420"/></p>',
+    ]
+    if taken_at:
+        parts.append(f"<p><strong>Taken:</strong> {taken_at}</p>")
+    if notes:
+        parts.append(f"<p><strong>Notes:</strong><br/>{notes}</p>")
+    return "".join(parts)
+
+
 def _build_survey_kml(request: FastAPIRequest) -> bytes:
     kml = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
     doc = ET.SubElement(kml, "Document")
@@ -373,12 +391,7 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
         placemark = ET.SubElement(photos_folder, "Placemark")
         _kml_text_node(placemark, "name", filename)
         _kml_text_node(placemark, "styleUrl", "#photo-pin")
-        description = (
-            f"Taken: {row.get('taken_at') or ''}<br/>"
-            f'<a href="{photo_url}">Open photo</a><br/>'
-            f"{row.get('notes') or ''}"
-        )
-        _kml_text_node(placemark, "description", description)
+        _kml_text_node(placemark, "description", _photo_description_for_kml(row, photo_url))
         point = ET.SubElement(placemark, "Point")
         _kml_text_node(point, "coordinates", f"{lon_f},{lat_f},0")
 
