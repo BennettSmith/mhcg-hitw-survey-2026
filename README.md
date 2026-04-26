@@ -137,6 +137,12 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+For contributor tooling, tests, and coverage gates, use:
+
+```bash
+make install-dev
+```
+
 Regenerate the manifest from the repo root:
 
 ```bash
@@ -184,6 +190,33 @@ From the repository root (so `survey_photos.yaml` and `photos/` resolve correctl
 Open **http://127.0.0.1:8765/** in a browser.
 
 `--reload` watches Python files only. If you regenerate **`survey_photos.yaml`**, restart the server (or hit the process with a code change) so the in-memory list reloads.
+
+### Test and CI workflow
+
+The local definition of done for this repo is:
+
+```bash
+make ci
+```
+
+That command runs the deterministic local checks for this project and must pass before work is considered complete.
+
+Useful commands:
+
+```bash
+make install-dev   # install Python + frontend test tooling
+make test-py       # run Python tests with coverage output
+make test-js       # run frontend tests with coverage output
+make test          # run both test suites
+make ci            # run both suites and enforce per-file 85% coverage gates
+```
+
+Coverage policy:
+
+- Python coverage is enforced per file for `webapp/app.py`, `scripts/extract_photo_exif_to_yaml.py`, and `scripts/check_coverage.py`.
+- Frontend coverage is enforced per file for `webapp/static/app.js` and other checked-in frontend source files.
+- The current minimum is **85% line coverage per file**.
+- Missing expected files in the coverage report are treated as failures.
 
 ### Run with Docker
 

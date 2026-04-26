@@ -8,11 +8,14 @@ VENV        := .venv
 VENV_PY     := $(VENV)/bin/python3
 VENV_PIP    := $(VENV)/bin/pip
 UVICORN     := $(VENV)/bin/uvicorn
+PYTEST      := $(VENV)/bin/pytest
 COMPOSE     := docker compose
+NPM         ?= npm
 OPEN_URL    ?= http://127.0.0.1:8765/
 SERVICE     := survey-viewer
 
 .PHONY: help install extract serve open \
+	install-dev test-py test-js test ci \
 	docker-build docker-up docker-down docker-restart docker-logs docker-ps docker-open browse
 
 help: ## Show available targets
@@ -23,6 +26,11 @@ install: ## Create .venv and install requirements.txt
 	$(PYTHON) -m venv $(VENV)
 	$(VENV_PIP) install -r requirements.txt
 
+install-dev: install ## Install Python and Node development dependencies
+	$(VENV_PIP) install -r requirements-dev.txt
+	@command -v $(NPM) >/dev/null || (echo "Missing npm; install a current Node LTS release" >&2 && exit 1)
+	$(NPM) install
+
 extract: ## Regenerate survey_photos.yaml from photos/ (EXIF)
 	@test -x $(VENV_PY) || (echo "Missing $(VENV); run: make install" >&2 && exit 1)
 	$(VENV_PY) scripts/extract_photo_exif_to_yaml.py
@@ -30,6 +38,23 @@ extract: ## Regenerate survey_photos.yaml from photos/ (EXIF)
 serve: ## Run the web viewer locally (uvicorn, port 8765)
 	@test -x $(UVICORN) || (echo "Missing $(UVICORN); run: make install" >&2 && exit 1)
 	$(UVICORN) webapp.app:app --reload --port 8765
+
+test-py: ## Run Python tests with coverage output
+	@test -x $(PYTEST) || (echo "Missing $(PYTEST); run: make install-dev" >&2 && exit 1)
+	$(PYTEST) --cov --cov-report=term-missing --cov-report=json
+
+test-js: ## Run frontend tests with coverage output
+	@command -v $(NPM) >/dev/null || (echo "Missing npm; install a current Node LTS release" >&2 && exit 1)
+	@test -d node_modules || (echo "Missing node_modules; run: make install-dev" >&2 && exit 1)
+	$(NPM) run test:coverage
+
+test: test-py test-js ## Run Python and frontend tests
+
+ci: ## Run the deterministic local definition-of-done checks
+	@printf '\n==> Python and frontend tests\n'
+	$(MAKE) test
+	@printf '\n==> Python coverage gates\n'
+	$(VENV_PY) scripts/check_coverage.py coverage.json
 
 open: ## Open the viewer URL in your default browser
 	@case "$$(uname -s)" in \

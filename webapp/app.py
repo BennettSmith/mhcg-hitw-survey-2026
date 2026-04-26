@@ -20,6 +20,7 @@ import math
 import os
 import shutil
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -27,39 +28,74 @@ from urllib.request import Request, urlopen
 import yaml
 from fastapi import FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
-PHOTOS_DIR = (ROOT / "photos").resolve()
-TRACK_DIR = (ROOT / "track").resolve()
-GPX_PATH = (TRACK_DIR / "MHCG-HITW-SURVEY.gpx").resolve()
-PINS_GPX_PATH = (TRACK_DIR / "MHCG-HITW-PINS.gpx").resolve()
-YAML_PATH = ROOT / "survey_photos.yaml"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-PHOTO_REMOTE_BASE_URL = os.environ.get("PHOTO_REMOTE_BASE_URL", "").rstrip("/")
-PHOTO_CACHE_DIR = Path(os.environ.get("PHOTO_CACHE_DIR", "/tmp/survey-photo-cache")).resolve()
 PHOTO_DOWNLOAD_TIMEOUT_SECONDS = 30
-NOTES_READ_ONLY = os.environ.get("NOTES_READ_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
-
-app = FastAPI(title="Survey photo viewer")
-_photos_cache: list[dict] | None = None
-_track_cache: list[list[float]] | None = None
-_profile_cache: dict | None = None
-_pins_cache: list[dict] | None = None
-
 _EARTH_RADIUS_M = 6_371_000.0
+
+
+@dataclass(slots=True)
+class AppConfig:
+    photos_dir: Path
+    track_dir: Path
+    gpx_path: Path
+    pins_gpx_path: Path
+    yaml_path: Path
+    static_dir: Path
+    photo_remote_base_url: str
+    photo_cache_dir: Path
+    photo_download_timeout_seconds: int
+    notes_read_only: bool
+
+
+@dataclass(slots=True)
+class AppCaches:
+    photos: list[dict] | None = None
+    track_coordinates: list[list[float]] | None = None
+    track_profile: dict | None = None
+    pins: list[dict] | None = None
+
+    def invalidate_photos(self) -> None:
+        self.photos = None
+
+    def reset(self) -> None:
+        self.photos = None
+        self.track_coordinates = None
+        self.track_profile = None
+        self.pins = None
+
+
+def _default_app_config() -> AppConfig:
+    photos_dir = (ROOT / "photos").resolve()
+    track_dir = (ROOT / "track").resolve()
+    return AppConfig(
+        photos_dir=photos_dir,
+        track_dir=track_dir,
+        gpx_path=(track_dir / "MHCG-HITW-SURVEY.gpx").resolve(),
+        pins_gpx_path=(track_dir / "MHCG-HITW-PINS.gpx").resolve(),
+        yaml_path=ROOT / "survey_photos.yaml",
+        static_dir=STATIC_DIR,
+        photo_remote_base_url=os.environ.get("PHOTO_REMOTE_BASE_URL", "").rstrip("/"),
+        photo_cache_dir=Path(os.environ.get("PHOTO_CACHE_DIR", "/tmp/survey-photo-cache")).resolve(),
+        photo_download_timeout_seconds=PHOTO_DOWNLOAD_TIMEOUT_SECONDS,
+        notes_read_only=os.environ.get("NOTES_READ_ONLY", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+    )
 
 
 def _gpx_local_tag(el: ET.Element) -> str:
     return el.tag.split("}")[-1]
 
 
-def _parse_gpx_waypoints(path: Path) -> list[dict]:
+def _parse_gpx_waypoints(path: Path, *, track_dir: Path) -> list[dict]:
     """
     Parse GPX <wpt> for ranger / trail notes (name = note text).
     Only files directly under ./track are accepted.
     """
-    if not path.is_file() or path.parent.resolve() != TRACK_DIR:
+    if not path.is_file() or path.parent.resolve() != track_dir.resolve():
         return []
     tree = ET.parse(path)
     root = tree.getroot()
@@ -102,12 +138,11 @@ def _parse_gpx_waypoints(path: Path) -> list[dict]:
     return out
 
 
-def _load_pins() -> list[dict]:
-    global _pins_cache
-    if _pins_cache is not None:
-        return _pins_cache
-    _pins_cache = _parse_gpx_waypoints(PINS_GPX_PATH)
-    return _pins_cache
+def _load_pins(caches: AppCaches, config: AppConfig) -> list[dict]:
+    if caches.pins is not None:
+        return caches.pins
+    caches.pins = _parse_gpx_waypoints(config.pins_gpx_path, track_dir=config.track_dir)
+    return caches.pins
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -118,7 +153,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
 
 
-def _parse_gpx_track_profile(path: Path) -> dict:
+def _parse_gpx_track_profile(path: Path, *, track_dir: Path) -> dict:
     """
     Parse trkpt sequence: lat, lon, elevation (m), cumulative distance (m).
     Returns coordinates for Leaflet plus parallel arrays for the elevation chart.
@@ -129,7 +164,7 @@ def _parse_gpx_track_profile(path: Path) -> dict:
         "elevations_m": [],
         "total_distance_m": 0.0,
     }
-    if not path.is_file() or path.parent.resolve() != TRACK_DIR:
+    if not path.is_file() or path.parent.resolve() != track_dir.resolve():
         return empty
     tree = ET.parse(path)
     root = tree.getroot()
@@ -174,52 +209,61 @@ def _parse_gpx_track_profile(path: Path) -> dict:
     }
 
 
-def _load_track_coordinates() -> list[list[float]]:
-    global _track_cache
-    if _track_cache is not None:
-        return _track_cache
-    prof = _load_track_profile()
-    _track_cache = prof["coordinates"]
-    return _track_cache
+def _load_track_profile(caches: AppCaches, config: AppConfig) -> dict:
+    if caches.track_profile is not None:
+        return caches.track_profile
+    caches.track_profile = _parse_gpx_track_profile(config.gpx_path, track_dir=config.track_dir)
+    return caches.track_profile
 
 
-def _load_track_profile() -> dict:
-    global _profile_cache
-    if _profile_cache is not None:
-        return _profile_cache
-    _profile_cache = _parse_gpx_track_profile(GPX_PATH)
-    return _profile_cache
+def _load_track_coordinates(caches: AppCaches, config: AppConfig) -> list[list[float]]:
+    if caches.track_coordinates is not None:
+        return caches.track_coordinates
+    profile = _load_track_profile(caches, config)
+    caches.track_coordinates = profile["coordinates"]
+    return caches.track_coordinates
 
 
-def _read_photos_from_disk() -> list[dict]:
-    if not YAML_PATH.is_file():
+def _read_photos_from_disk(yaml_path: Path) -> list[dict]:
+    if not yaml_path.is_file():
         return []
-    with YAML_PATH.open(encoding="utf-8") as f:
+    with yaml_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return list(data.get("photos") or [])
 
 
-def _photo_path_for_filename(filename: str) -> tuple[str, Path]:
+def _load_photos(caches: AppCaches, config: AppConfig) -> list[dict]:
+    if caches.photos is not None:
+        return caches.photos
+    caches.photos = _read_photos_from_disk(config.yaml_path)
+    return caches.photos
+
+
+def invalidate_photos_cache(caches: AppCaches) -> None:
+    caches.invalidate_photos()
+
+
+def _photo_path_for_filename(filename: str, photos_dir: Path) -> tuple[str, Path]:
     name = Path(filename).name
     if name != filename or not name or name.startswith("."):
         raise ValueError("Invalid filename")
-    path = (PHOTOS_DIR / name).resolve()
-    if path.parent != PHOTOS_DIR:
+    path = (photos_dir / name).resolve()
+    if path.parent != photos_dir.resolve():
         raise ValueError("Invalid filename")
     return name, path
 
 
-def _cached_photo_path_for_name(name: str) -> Path:
-    path = (PHOTO_CACHE_DIR / name).resolve()
-    if path.parent != PHOTO_CACHE_DIR:
+def _cached_photo_path_for_name(name: str, photo_cache_dir: Path) -> Path:
+    path = (photo_cache_dir / name).resolve()
+    if path.parent != photo_cache_dir.resolve():
         raise ValueError("Invalid filename")
     return path
 
 
-def _remote_photo_url(name: str) -> str | None:
-    if not PHOTO_REMOTE_BASE_URL:
+def _remote_photo_url(name: str, photo_remote_base_url: str) -> str | None:
+    if not photo_remote_base_url:
         return None
-    return f"{PHOTO_REMOTE_BASE_URL}/{quote(name)}"
+    return f"{photo_remote_base_url}/{quote(name)}"
 
 
 def _looks_like_git_lfs_pointer(path: Path) -> bool:
@@ -231,19 +275,19 @@ def _looks_like_git_lfs_pointer(path: Path) -> bool:
         return False
 
 
-def _download_remote_photo(name: str, destination: Path) -> None:
-    url = _remote_photo_url(name)
+def _download_remote_photo(name: str, destination: Path, config: AppConfig) -> None:
+    url = _remote_photo_url(name, config.photo_remote_base_url)
     if url is None:
         raise HTTPException(
             status_code=404,
             detail="Photo file is missing and no remote photo source is configured",
         )
 
-    PHOTO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    config.photo_cache_dir.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_name(f".{destination.name}.tmp")
     request = Request(url, headers={"User-Agent": "mhcg-hitw-survey-viewer/1.0"})
     try:
-        with urlopen(request, timeout=PHOTO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=config.photo_download_timeout_seconds) as response:
             content_type = response.headers.get_content_type()
             if not content_type.startswith("image/"):
                 raise HTTPException(
@@ -266,11 +310,11 @@ def _download_remote_photo(name: str, destination: Path) -> None:
         raise HTTPException(status_code=502, detail=f"Could not cache remote photo: {exc}") from exc
 
 
-def _with_photo_media_info(row: dict) -> dict:
+def _with_photo_media_info(row: dict, config: AppConfig) -> dict:
     out = dict(row)
     filename = str(out.get("filename") or "")
     try:
-        name, path = _photo_path_for_filename(filename)
+        name, path = _photo_path_for_filename(filename, config.photos_dir)
     except ValueError:
         out["media_status"] = "invalid_filename"
         out["media_url"] = None
@@ -279,18 +323,18 @@ def _with_photo_media_info(row: dict) -> dict:
 
     out["media_url"] = f"/media/{name}"
     if not path.is_file():
-        cache_path = _cached_photo_path_for_name(name)
+        cache_path = _cached_photo_path_for_name(name, config.photo_cache_dir)
         if cache_path.is_file() and not _looks_like_git_lfs_pointer(cache_path):
             out["media_status"] = "cached"
             out["media_bytes"] = cache_path.stat().st_size
-        elif PHOTO_REMOTE_BASE_URL:
+        elif config.photo_remote_base_url:
             out["media_status"] = "remote_uncached"
             out["media_bytes"] = 0
         else:
             out["media_status"] = "missing"
             out["media_bytes"] = 0
     elif _looks_like_git_lfs_pointer(path):
-        if PHOTO_REMOTE_BASE_URL:
+        if config.photo_remote_base_url:
             out["media_status"] = "remote_uncached"
             out["media_bytes"] = 0
         else:
@@ -302,23 +346,15 @@ def _with_photo_media_info(row: dict) -> dict:
     return out
 
 
-def _load_photos() -> list[dict]:
-    global _photos_cache
-    if _photos_cache is not None:
-        return _photos_cache
-    _photos_cache = _read_photos_from_disk()
-    return _photos_cache
-
-
 def _kml_text_node(parent: ET.Element, tag: str, text: object) -> ET.Element:
     child = ET.SubElement(parent, tag)
     child.text = "" if text is None else str(text)
     return child
 
 
-def _photo_link_for_kml(request: FastAPIRequest, filename: str) -> str:
+def _photo_link_for_kml(request: FastAPIRequest, filename: str, config: AppConfig) -> str:
     name = Path(filename).name
-    return _remote_photo_url(name) or str(request.url_for("media", filename=name))
+    return _remote_photo_url(name, config.photo_remote_base_url) or str(request.url_for("media", filename=name))
 
 
 def _photo_description_for_kml(row: dict, photo_url: str) -> str:
@@ -338,7 +374,13 @@ def _photo_description_for_kml(row: dict, photo_url: str) -> str:
     return "".join(parts)
 
 
-def _build_survey_kml(request: FastAPIRequest) -> bytes:
+def _build_survey_kml(
+    request: FastAPIRequest,
+    config: AppConfig,
+    photos: list[dict],
+    pins: list[dict],
+    profile: dict,
+) -> bytes:
     kml = ET.Element("kml", xmlns="http://www.opengis.net/kml/2.2")
     doc = ET.SubElement(kml, "Document")
     _kml_text_node(doc, "name", "MHCG HITW Survey 2026")
@@ -358,7 +400,6 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
     _kml_text_node(ranger_icon, "color", "ff2019d7")
     _kml_text_node(ranger_icon, "scale", "1.1")
 
-    profile = _load_track_profile()
     coords = profile.get("coordinates") or []
     elevations = profile.get("elevations_m") or []
     if len(coords) >= 2:
@@ -376,7 +417,7 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
 
     photos_folder = ET.SubElement(doc, "Folder")
     _kml_text_node(photos_folder, "name", "Photo locations")
-    for row in _load_photos():
+    for row in photos:
         filename = str(row.get("filename") or "")
         lat = row.get("latitude")
         lon = row.get("longitude")
@@ -387,7 +428,7 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
             lon_f = float(lon)
         except (TypeError, ValueError):
             continue
-        photo_url = _photo_link_for_kml(request, filename)
+        photo_url = _photo_link_for_kml(request, filename, config)
         placemark = ET.SubElement(photos_folder, "Placemark")
         _kml_text_node(placemark, "name", filename)
         _kml_text_node(placemark, "styleUrl", "#photo-pin")
@@ -397,7 +438,7 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
 
     ranger_folder = ET.SubElement(doc, "Folder")
     _kml_text_node(ranger_folder, "name", "Ranger pins")
-    for pin in _load_pins():
+    for pin in pins:
         lat = pin.get("latitude")
         lon = pin.get("longitude")
         try:
@@ -419,115 +460,121 @@ def _build_survey_kml(request: FastAPIRequest) -> bytes:
     return ET.tostring(kml, encoding="utf-8", xml_declaration=True)
 
 
-def invalidate_photos_cache() -> None:
-    global _photos_cache
-    _photos_cache = None
-
-
 class PhotoNotesBody(BaseModel):
     notes: str = Field(default="", max_length=16000)
 
 
-@app.get("/api/photos")
-def api_photos() -> list[dict]:
-    return [_with_photo_media_info(row) for row in _load_photos()]
+def create_app(config: AppConfig | None = None) -> FastAPI:
+    app_config = config or _default_app_config()
+    app = FastAPI(title="Survey photo viewer")
+    caches = AppCaches()
+    app.state.config = app_config
+    app.state.caches = caches
+    app.mount("/static", StaticFiles(directory=app_config.static_dir), name="static")
 
+    @app.get("/api/photos")
+    def api_photos() -> list[dict]:
+        return [_with_photo_media_info(row, app_config) for row in _load_photos(caches, app_config)]
 
-@app.get("/api/config")
-def api_config() -> dict:
-    return {"notes_read_only": NOTES_READ_ONLY}
+    @app.get("/api/config")
+    def api_config() -> dict:
+        return {"notes_read_only": app_config.notes_read_only}
 
+    @app.put("/api/photos/{filename}/notes")
+    def put_photo_notes(filename: str, body: PhotoNotesBody) -> dict:
+        """Persist field notes for one photo in survey_photos.yaml (basename only)."""
+        if app_config.notes_read_only:
+            raise HTTPException(status_code=403, detail="Notes are read-only in this deployment")
+        name = Path(filename).name
+        if name != filename or not name or name.startswith("."):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        photos = _read_photos_from_disk(app_config.yaml_path)
+        found = False
+        for row in photos:
+            if row.get("filename") == name:
+                row["notes"] = body.notes
+                found = True
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail="Photo not in manifest")
+        with app_config.yaml_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                {"photos": photos},
+                f,
+                sort_keys=False,
+                allow_unicode=True,
+                default_flow_style=False,
+            )
+        invalidate_photos_cache(caches)
+        return {"ok": True, "filename": name, "notes": body.notes}
 
-@app.put("/api/photos/{filename}/notes")
-def put_photo_notes(filename: str, body: PhotoNotesBody) -> dict:
-    """Persist field notes for one photo in survey_photos.yaml (basename only)."""
-    if NOTES_READ_ONLY:
-        raise HTTPException(status_code=403, detail="Notes are read-only in this deployment")
-    name = Path(filename).name
-    if name != filename or not name or name.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    photos = _read_photos_from_disk()
-    found = False
-    for row in photos:
-        if row.get("filename") == name:
-            row["notes"] = body.notes
-            found = True
-            break
-    if not found:
-        raise HTTPException(status_code=404, detail="Photo not in manifest")
-    with YAML_PATH.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            {"photos": photos},
-            f,
-            sort_keys=False,
-            allow_unicode=True,
-            default_flow_style=False,
+    @app.get("/api/track")
+    def api_track() -> dict:
+        """Hike polyline as [[lat, lon], ...] for Leaflet (empty if GPX missing)."""
+        coords = _load_track_coordinates(caches, app_config)
+        return {"coordinates": coords}
+
+    @app.get("/api/track-profile")
+    def api_track_profile() -> dict:
+        """
+        GPX track with cumulative horizontal distance (m) and elevation (m) per vertex.
+        """
+        return _load_track_profile(caches, app_config)
+
+    @app.get("/api/pins")
+    def api_pins() -> list[dict]:
+        """Waypoints from track/MHCG-HITW-PINS.gpx (ranger notes along the trail)."""
+        return _load_pins(caches, app_config)
+
+    @app.get("/survey.kml")
+    def survey_kml(request: FastAPIRequest) -> Response:
+        headers = {"Content-Disposition": 'inline; filename="mhcg-hitw-survey-2026.kml"'}
+        return Response(
+            _build_survey_kml(
+                request,
+                app_config,
+                _load_photos(caches, app_config),
+                _load_pins(caches, app_config),
+                _load_track_profile(caches, app_config),
+            ),
+            media_type="application/vnd.google-earth.kml+xml",
+            headers=headers,
         )
-    invalidate_photos_cache()
-    return {"ok": True, "filename": name, "notes": body.notes}
 
+    @app.get("/media/{filename}")
+    def media(filename: str) -> FileResponse:
+        """Serve a photo from local disk, cache, or the configured GitHub raw source."""
+        try:
+            name, path = _photo_path_for_filename(filename, app_config.photos_dir)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Invalid filename")
 
-@app.get("/api/track")
-def api_track() -> dict:
-    """Hike polyline as [[lat, lon], ...] for Leaflet (empty if GPX missing)."""
-    coords = _load_track_coordinates()
-    return {"coordinates": coords}
+        if path.is_file() and not _looks_like_git_lfs_pointer(path):
+            return FileResponse(path, filename=name, media_type="image/jpeg")
 
+        cache_path = _cached_photo_path_for_name(name, app_config.photo_cache_dir)
+        if cache_path.is_file() and not _looks_like_git_lfs_pointer(cache_path):
+            return FileResponse(cache_path, filename=name, media_type="image/jpeg")
 
-@app.get("/api/track-profile")
-def api_track_profile() -> dict:
-    """
-    GPX track with cumulative horizontal distance (m) and elevation (m) per vertex.
-    """
-    return _load_track_profile()
+        if app_config.photo_remote_base_url:
+            _download_remote_photo(name, cache_path, app_config)
+            return FileResponse(cache_path, filename=name, media_type="image/jpeg")
 
-
-@app.get("/api/pins")
-def api_pins() -> list[dict]:
-    """Waypoints from track/MHCG-HITW-PINS.gpx (ranger notes along the trail)."""
-    return _load_pins()
-
-
-@app.get("/survey.kml")
-def survey_kml(request: FastAPIRequest) -> Response:
-    headers = {"Content-Disposition": 'inline; filename="mhcg-hitw-survey-2026.kml"'}
-    return Response(
-        _build_survey_kml(request),
-        media_type="application/vnd.google-earth.kml+xml",
-        headers=headers,
-    )
-
-
-@app.get("/media/{filename}")
-def media(filename: str) -> FileResponse:
-    """Serve a photo from local disk, cache, or the configured GitHub raw source."""
-    try:
-        name, path = _photo_path_for_filename(filename)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Invalid filename")
-
-    if path.is_file() and not _looks_like_git_lfs_pointer(path):
-        return FileResponse(path, filename=name, media_type="image/jpeg")
-
-    cache_path = _cached_photo_path_for_name(name)
-    if cache_path.is_file() and not _looks_like_git_lfs_pointer(cache_path):
-        return FileResponse(cache_path, filename=name, media_type="image/jpeg")
-
-    if PHOTO_REMOTE_BASE_URL:
-        _download_remote_photo(name, cache_path)
-        return FileResponse(cache_path, filename=name, media_type="image/jpeg")
-
-    if not path.is_file():
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="Photo file is missing from the deployed photos directory",
+            )
         raise HTTPException(
-            status_code=404,
-            detail="Photo file is missing from the deployed photos directory",
+            status_code=409,
+            detail="Photo file is a Git LFS pointer, not the real image bytes",
         )
-    raise HTTPException(
-        status_code=409,
-        detail="Photo file is a Git LFS pointer, not the real image bytes",
-    )
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(app_config.static_dir / "index.html")
+
+    return app
 
 
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+app = create_app()

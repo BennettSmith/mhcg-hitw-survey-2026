@@ -1,3 +1,5 @@
+node_modules
+
 # Python
 .venv/
 venv/
@@ -17,6 +19,8 @@ build/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage/
+coverage.json
 htmlcov/
 .tox/
 
