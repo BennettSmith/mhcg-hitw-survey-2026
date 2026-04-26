@@ -1209,7 +1209,10 @@
             window.alert("Could not open Google Earth for this location.");
             return;
           }
-          window.open(url, "_blank", "noopener");
+          var earthWindow = window.open(url, "mhcg-google-earth");
+          if (earthWindow && earthWindow.focus) {
+            earthWindow.focus();
+          }
         });
 
         function createBaseLayers() {
