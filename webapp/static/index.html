@@ -422,6 +422,17 @@
         object-fit: contain;
         cursor: zoom-in;
       }
+      #photo-error {
+        position: absolute;
+        inset: auto 1rem 1rem;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid #d6a55f;
+        border-radius: 6px;
+        background: #fff7e8;
+        color: #4c3520;
+        font-size: 0.82rem;
+        line-height: 1.35;
+      }
       .photo-notes-section {
         flex: 0 0 auto;
         border-top: 1px solid var(--border);
@@ -563,6 +574,7 @@
                 <p class="pin-name" id="photo-pin-name"></p>
                 <p class="pin-hint">No photo — pin from <code>track/MHCG-HITW-PINS.gpx</code>.</p>
               </div>
+              <div id="photo-error" hidden></div>
             </div>
             <div class="photo-notes-section">
               <label for="photo-notes">Trail / ranger notes</label>
@@ -624,6 +636,7 @@
         const listPanel = document.getElementById("list-panel");
         const searchEl = document.getElementById("search");
         const photoEl = document.getElementById("photo");
+        const photoErrorEl = document.getElementById("photo-error");
         const photoLightboxEl = document.getElementById("photo-lightbox");
         const photoLightboxStageEl = document.getElementById("photo-lightbox-stage");
         const photoLightboxImgEl = document.getElementById("photo-lightbox-img");
@@ -866,6 +879,9 @@
             latitude: p.latitude,
             longitude: p.longitude,
             notes: p.notes,
+            media_url: p.media_url || "",
+            media_status: p.media_status || "unknown",
+            media_bytes: p.media_bytes || 0,
           };
         }
 
@@ -898,6 +914,30 @@
           if (mapPhotoTitle) {
             mapPhotoTitle.textContent = isPin ? "Waypoint location" : "Photo location";
           }
+        }
+
+        function photoMediaStatusMessage(p) {
+          if (!p || p.kind !== "photo") {
+            return "";
+          }
+          if (p.media_status === "missing") {
+            return "This photo is listed in survey_photos.yaml, but the image file is missing from the deployed photos directory.";
+          }
+          if (p.media_status === "git_lfs_pointer") {
+            return "This deployed file is a Git LFS pointer, not the real JPEG. Make sure Render fetches Git LFS objects or deploy the real photos another way.";
+          }
+          if (p.media_status === "invalid_filename") {
+            return "This photo filename is not valid for the media route.";
+          }
+          return "";
+        }
+
+        function showPhotoError(message) {
+          if (!photoErrorEl) {
+            return;
+          }
+          photoErrorEl.textContent = message;
+          photoErrorEl.hidden = !message;
         }
 
         function fmtDmsSeconds(sec) {
@@ -1857,10 +1897,18 @@
           setPhotoPanelMode(p.kind === "pin");
           if (p.kind === "photo") {
             photoEl.alt = p.filename;
-            photoEl.src = "/media/" + encodeURIComponent(p.filename);
+            var mediaMessage = photoMediaStatusMessage(p);
+            if (mediaMessage) {
+              photoEl.removeAttribute("src");
+              showPhotoError(mediaMessage);
+            } else {
+              showPhotoError("");
+              photoEl.src = p.media_url || "/media/" + encodeURIComponent(p.filename);
+            }
           } else {
             photoEl.removeAttribute("src");
             photoEl.alt = p.name || "Waypoint";
+            showPhotoError("");
           }
           renderMeta(p);
           syncNotesFromSelection();
@@ -2012,6 +2060,11 @@
         if (photoEl) {
           photoEl.addEventListener("click", function () {
             openPhotoLightbox();
+          });
+          photoEl.addEventListener("error", function () {
+            if (selected && selected.kind === "photo") {
+              showPhotoError("The browser could not load this photo from " + (selected.media_url || "the media route") + ".");
+            }
           });
         }
         if (photoLightboxEl) {

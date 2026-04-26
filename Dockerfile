@@ -1,5 +1,5 @@
 # Survey photo viewer (FastAPI + uvicorn).
-# Expects /work/survey_photos.yaml and /work/photos at runtime; GPX is baked in and can be overridden by mounting ./track (see docker-compose.yml).
+# Expects /work/survey_photos.yaml at runtime. Photos can be mounted locally or fetched from PHOTO_REMOTE_BASE_URL and cached.
 FROM python:3.12-slim-bookworm
 
 WORKDIR /work
@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 COPY webapp/ webapp/
 COPY track/ track/
 COPY survey_photos.yaml .
-COPY photos/ photos/
 
 RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /work

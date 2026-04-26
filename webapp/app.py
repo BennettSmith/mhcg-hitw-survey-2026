@@ -16,8 +16,12 @@ Docker (from repo root):
 from __future__ import annotations
 
 import math
+import os
+import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import yaml
 from fastapi import FastAPI, HTTPException
@@ -31,6 +35,9 @@ GPX_PATH = (TRACK_DIR / "MHCG-HITW-SURVEY.gpx").resolve()
 PINS_GPX_PATH = (TRACK_DIR / "MHCG-HITW-PINS.gpx").resolve()
 YAML_PATH = ROOT / "survey_photos.yaml"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+PHOTO_REMOTE_BASE_URL = os.environ.get("PHOTO_REMOTE_BASE_URL", "").rstrip("/")
+PHOTO_CACHE_DIR = Path(os.environ.get("PHOTO_CACHE_DIR", "/tmp/survey-photo-cache")).resolve()
+PHOTO_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 app = FastAPI(title="Survey photo viewer")
 _photos_cache: list[dict] | None = None
@@ -190,6 +197,109 @@ def _read_photos_from_disk() -> list[dict]:
     return list(data.get("photos") or [])
 
 
+def _photo_path_for_filename(filename: str) -> tuple[str, Path]:
+    name = Path(filename).name
+    if name != filename or not name or name.startswith("."):
+        raise ValueError("Invalid filename")
+    path = (PHOTOS_DIR / name).resolve()
+    if path.parent != PHOTOS_DIR:
+        raise ValueError("Invalid filename")
+    return name, path
+
+
+def _cached_photo_path_for_name(name: str) -> Path:
+    path = (PHOTO_CACHE_DIR / name).resolve()
+    if path.parent != PHOTO_CACHE_DIR:
+        raise ValueError("Invalid filename")
+    return path
+
+
+def _remote_photo_url(name: str) -> str | None:
+    if not PHOTO_REMOTE_BASE_URL:
+        return None
+    return f"{PHOTO_REMOTE_BASE_URL}/{quote(name)}"
+
+
+def _looks_like_git_lfs_pointer(path: Path) -> bool:
+    try:
+        if path.stat().st_size > 1024:
+            return False
+        return path.read_bytes().startswith(b"version https://git-lfs.github.com/spec/")
+    except OSError:
+        return False
+
+
+def _download_remote_photo(name: str, destination: Path) -> None:
+    url = _remote_photo_url(name)
+    if url is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Photo file is missing and no remote photo source is configured",
+        )
+
+    PHOTO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_name(f".{destination.name}.tmp")
+    request = Request(url, headers={"User-Agent": "mhcg-hitw-survey-viewer/1.0"})
+    try:
+        with urlopen(request, timeout=PHOTO_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            content_type = response.headers.get_content_type()
+            if not content_type.startswith("image/"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Remote photo source returned {content_type}, not an image",
+                )
+            with tmp.open("wb") as f:
+                shutil.copyfileobj(response, f)
+        if _looks_like_git_lfs_pointer(tmp):
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Remote photo source returned a Git LFS pointer, not the real image bytes",
+            )
+        os.replace(tmp, destination)
+    except HTTPException:
+        raise
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=502, detail=f"Could not cache remote photo: {exc}") from exc
+
+
+def _with_photo_media_info(row: dict) -> dict:
+    out = dict(row)
+    filename = str(out.get("filename") or "")
+    try:
+        name, path = _photo_path_for_filename(filename)
+    except ValueError:
+        out["media_status"] = "invalid_filename"
+        out["media_url"] = None
+        out["media_bytes"] = 0
+        return out
+
+    out["media_url"] = f"/media/{name}"
+    if not path.is_file():
+        cache_path = _cached_photo_path_for_name(name)
+        if cache_path.is_file() and not _looks_like_git_lfs_pointer(cache_path):
+            out["media_status"] = "cached"
+            out["media_bytes"] = cache_path.stat().st_size
+        elif PHOTO_REMOTE_BASE_URL:
+            out["media_status"] = "remote_uncached"
+            out["media_bytes"] = 0
+        else:
+            out["media_status"] = "missing"
+            out["media_bytes"] = 0
+    elif _looks_like_git_lfs_pointer(path):
+        if PHOTO_REMOTE_BASE_URL:
+            out["media_status"] = "remote_uncached"
+            out["media_bytes"] = 0
+        else:
+            out["media_status"] = "git_lfs_pointer"
+            out["media_bytes"] = path.stat().st_size
+    else:
+        out["media_status"] = "ok"
+        out["media_bytes"] = path.stat().st_size
+    return out
+
+
 def _load_photos() -> list[dict]:
     global _photos_cache
     if _photos_cache is not None:
@@ -209,7 +319,7 @@ class PhotoNotesBody(BaseModel):
 
 @app.get("/api/photos")
 def api_photos() -> list[dict]:
-    return _load_photos()
+    return [_with_photo_media_info(row) for row in _load_photos()]
 
 
 @app.put("/api/photos/{filename}/notes")
@@ -262,14 +372,32 @@ def api_pins() -> list[dict]:
 
 @app.get("/media/{filename}")
 def media(filename: str) -> FileResponse:
-    """Serve a file from ./photos (basename only; no path traversal)."""
-    name = Path(filename).name
-    if name != filename or not name or name.startswith("."):
+    """Serve a photo from local disk, cache, or the configured GitHub raw source."""
+    try:
+        name, path = _photo_path_for_filename(filename)
+    except ValueError:
         raise HTTPException(status_code=404, detail="Invalid filename")
-    path = (PHOTOS_DIR / name).resolve()
-    if path.parent != PHOTOS_DIR or not path.is_file():
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(path, filename=name)
+
+    if path.is_file() and not _looks_like_git_lfs_pointer(path):
+        return FileResponse(path, filename=name, media_type="image/jpeg")
+
+    cache_path = _cached_photo_path_for_name(name)
+    if cache_path.is_file() and not _looks_like_git_lfs_pointer(cache_path):
+        return FileResponse(cache_path, filename=name, media_type="image/jpeg")
+
+    if PHOTO_REMOTE_BASE_URL:
+        _download_remote_photo(name, cache_path)
+        return FileResponse(cache_path, filename=name, media_type="image/jpeg")
+
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Photo file is missing from the deployed photos directory",
+        )
+    raise HTTPException(
+        status_code=409,
+        detail="Photo file is a Git LFS pointer, not the real image bytes",
+    )
 
 
 @app.get("/")
