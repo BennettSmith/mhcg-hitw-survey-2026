@@ -1,7 +1,8 @@
 # PLAN
 
 ## Status
-- Pending review
+- Approved
+- Completed
 
 ## Goal
 - Add GitHub-side enforcement so `make ci` runs before changes can merge to `main`.
@@ -53,5 +54,4 @@
 - GitHub branch protection may need the workflow check to exist remotely before the required-status-check rule can be applied cleanly.
 - If direct pushes to `main` are already common, protection may temporarily interrupt that workflow until PR-based merges are adopted.
 
-## Approval
-- Awaiting user review of this GitHub/branch-protection plan before implementation.
+- Approved by user; execution completed.
