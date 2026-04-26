@@ -7,3 +7,16 @@ services:
       - ./survey_photos.yaml:/work/survey_photos.yaml
       - ./photos:/work/photos:ro
       - ./track:/work/track:ro
+
+  survey-viewer-remote-cache:
+    build: .
+    profiles:
+      - remote-cache
+    ports:
+      - "8767:8000"
+    environment:
+      PHOTO_REMOTE_BASE_URL: https://raw.githubusercontent.com/BennettSmith/mhcg-hitw-survey-2026/533d94246461cfaac1d57c10394513262fa74727/photos
+      PHOTO_CACHE_DIR: /tmp/survey-photo-cache
+    volumes:
+      - ./survey_photos.yaml:/work/survey_photos.yaml
+      - ./track:/work/track:ro

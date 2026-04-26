@@ -50,7 +50,21 @@ Fastest way to run the **web viewer in Docker** and open it in a browser. Host P
 docker compose up -d --build
 ```
 
-The first build can take a few minutes. When the container is up, the UI is at **http://127.0.0.1:8765/** (compose maps host port **8765** to port **8000** in the container).
+The first build can take a few minutes. When the container is up, the UI is at **`http://127.0.0.1:8765/`** (compose maps host port **8765** to port **8000** in the container).
+
+By default, local Docker development mounts your repo's **`./photos`** directory into the container, so image loads use the files on your machine and do not fetch from GitHub.
+
+To test the Render-style behavior locally (no mounted photos; fetch each image from GitHub on first view and cache it in the container), run the profiled service instead:
+
+```bash
+docker compose --profile remote-cache up -d --build survey-viewer-remote-cache
+```
+
+That test service is available at **`http://127.0.0.1:8767/`**. Stop it with:
+
+```bash
+docker compose --profile remote-cache down
+```
 
 ### Open a browser
 
@@ -58,7 +72,7 @@ The first build can take a few minutes. When the container is up, the UI is at *
 - **Windows Command Prompt:** `start http://127.0.0.1:8765/`
 - **Windows PowerShell:** `Start-Process "http://127.0.0.1:8765/"`
 
-Or paste **http://127.0.0.1:8765/** into Chrome, Edge, or Safari.
+Or paste **`http://127.0.0.1:8765/`** into Chrome, Edge, or Safari.
 
 ### Makefile shortcut (macOS / Linux)
 
