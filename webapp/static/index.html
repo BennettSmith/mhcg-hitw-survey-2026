@@ -50,22 +50,6 @@
         font-size: 0.8rem;
         color: var(--muted);
       }
-      #basemap-toggle-btn {
-        margin-left: auto;
-        font: inherit;
-        font-size: 0.74rem;
-        line-height: 1.1;
-        padding: 0.24rem 0.55rem;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: #faf9f7;
-        color: var(--text);
-        cursor: pointer;
-      }
-      #basemap-toggle-btn:hover {
-        background: var(--accent-soft);
-        border-color: var(--accent);
-      }
       main {
         flex: 1;
         min-height: 0;
@@ -354,6 +338,11 @@
         justify-content: space-between;
         gap: 0.5rem;
       }
+      .map-card-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
       .map-card-title button {
         font: inherit;
         font-size: 0.66rem;
@@ -545,7 +534,6 @@
     <header>
       <h1>Mojave survey photos</h1>
       <span id="count-label"></span>
-      <button type="button" id="basemap-toggle-btn" aria-pressed="false">Basemap: Topo</button>
     </header>
     <main id="main" hidden>
       <aside id="list-panel">
@@ -597,14 +585,20 @@
           <div class="card map-photo-card">
             <h2 class="map-card-title">
               <span id="map-photo-title-text">Photo location</span>
-              <button type="button" id="recenter-photo-btn">Recenter</button>
+              <span class="map-card-actions">
+                <button type="button" id="basemap-photo-btn" aria-pressed="true">Toggle to: Topo</button>
+                <button type="button" id="recenter-photo-btn">Recenter</button>
+              </span>
             </h2>
             <div id="map-photo" class="map-host" role="presentation"></div>
           </div>
           <div class="card map-track-card">
             <h2 class="map-card-title">
               <span id="map-track-title-text">Survey track</span>
-              <button type="button" id="recenter-track-btn">Recenter</button>
+              <span class="map-card-actions">
+                <button type="button" id="basemap-track-btn" aria-pressed="true">Toggle to: Topo</button>
+                <button type="button" id="recenter-track-btn">Recenter</button>
+              </span>
             </h2>
             <div id="map-track" class="map-host" role="presentation"></div>
           </div>
@@ -640,7 +634,8 @@
         const photoLightboxEl = document.getElementById("photo-lightbox");
         const photoLightboxStageEl = document.getElementById("photo-lightbox-stage");
         const photoLightboxImgEl = document.getElementById("photo-lightbox-img");
-        const basemapToggleBtn = document.getElementById("basemap-toggle-btn");
+        const photoBasemapBtn = document.getElementById("basemap-photo-btn");
+        const trackBasemapBtn = document.getElementById("basemap-track-btn");
         const metaEl = document.getElementById("meta-block");
         const countLabel = document.getElementById("count-label");
         const mainEl = document.getElementById("main");
@@ -684,7 +679,8 @@
         let photoBaseLayers = null;
         let activePinIndex = null;
         const PHOTO_MAP_DEFAULT_ZOOM = 17;
-        let activeBasemap = "topo";
+        let trackBasemap = "sat";
+        let photoBasemap = "sat";
         var lightboxOpen = false;
         var lightboxBaseScale = 1;
         var lightboxScale = 1;
@@ -1158,36 +1154,47 @@
           return { topo: topo, sat: sat };
         }
 
-        function setMapBasemap(map, layers) {
+        function setMapBasemap(map, layers, basemap) {
           if (!map || !layers) {
             return;
           }
           map.removeLayer(layers.topo);
           map.removeLayer(layers.sat);
-          if (activeBasemap === "sat") {
+          if (basemap === "sat") {
             layers.sat.addTo(map);
           } else {
             layers.topo.addTo(map);
           }
         }
 
-        function updateBasemapToggleUi() {
-          if (!basemapToggleBtn) {
+        function updateBasemapButton(btn, basemap) {
+          if (!btn) {
             return;
           }
-          var isSat = activeBasemap === "sat";
-          basemapToggleBtn.textContent = isSat ? "Basemap: Satellite" : "Basemap: Topo";
-          basemapToggleBtn.setAttribute("aria-pressed", isSat ? "true" : "false");
+          var isSat = basemap === "sat";
+          btn.textContent = isSat ? "Toggle to: Topo" : "Toggle to: Satelite";
+          btn.setAttribute("aria-pressed", isSat ? "true" : "false");
+          btn.title = isSat ? "Switch to topo basemap" : "Switch to satellite basemap";
         }
 
-        function toggleBasemapMode() {
-          activeBasemap = activeBasemap === "sat" ? "topo" : "sat";
-          updateBasemapToggleUi();
+        function updateBasemapButtons() {
+          updateBasemapButton(trackBasemapBtn, trackBasemap);
+          updateBasemapButton(photoBasemapBtn, photoBasemap);
+        }
+
+        function toggleTrackBasemap() {
+          trackBasemap = trackBasemap === "sat" ? "topo" : "sat";
+          updateBasemapButton(trackBasemapBtn, trackBasemap);
           if (trackMap && trackBaseLayers) {
-            setMapBasemap(trackMap, trackBaseLayers);
+            setMapBasemap(trackMap, trackBaseLayers, trackBasemap);
           }
+        }
+
+        function togglePhotoBasemap() {
+          photoBasemap = photoBasemap === "sat" ? "topo" : "sat";
+          updateBasemapButton(photoBasemapBtn, photoBasemap);
           if (photoMap && photoBaseLayers) {
-            setMapBasemap(photoMap, photoBaseLayers);
+            setMapBasemap(photoMap, photoBaseLayers, photoBasemap);
           }
         }
 
@@ -1730,10 +1737,10 @@
           destroyMaps();
           trackMap = L.map("map-track", { zoomControl: true });
           trackBaseLayers = createBaseLayers();
-          setMapBasemap(trackMap, trackBaseLayers);
+          setMapBasemap(trackMap, trackBaseLayers, trackBasemap);
           photoMap = L.map("map-photo", { zoomControl: true });
           photoBaseLayers = createBaseLayers();
-          setMapBasemap(photoMap, photoBaseLayers);
+          setMapBasemap(photoMap, photoBaseLayers, photoBasemap);
 
           if (trackCoords.length >= 2) {
             photoTrackLine = L.polyline(trackCoords, {
@@ -2164,12 +2171,17 @@
             recenterPhotoMap();
           });
         }
-        if (basemapToggleBtn) {
-          basemapToggleBtn.addEventListener("click", function () {
-            toggleBasemapMode();
+        if (trackBasemapBtn) {
+          trackBasemapBtn.addEventListener("click", function () {
+            toggleTrackBasemap();
           });
         }
-        updateBasemapToggleUi();
+        if (photoBasemapBtn) {
+          photoBasemapBtn.addEventListener("click", function () {
+            togglePhotoBasemap();
+          });
+        }
+        updateBasemapButtons();
 
         window.addEventListener("resize", function () {
           invalidateMaps();
