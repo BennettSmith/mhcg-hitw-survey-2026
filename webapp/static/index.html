@@ -411,6 +411,23 @@
         object-fit: contain;
         cursor: zoom-in;
       }
+      #photo-loading {
+        position: absolute;
+        inset: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 1rem;
+        border-radius: 8px;
+        background: rgba(250, 249, 247, 0.92);
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.4;
+      }
+      #photo-loading[hidden] {
+        display: none;
+      }
       #photo-error {
         position: absolute;
         inset: auto 1rem 1rem;
@@ -574,6 +591,7 @@
             <h2>Photo</h2>
             <div id="photo-wrap">
               <img id="photo" alt="" />
+              <div id="photo-loading" hidden>Loading photo…<br />First load may take a moment while it is fetched and cached.</div>
               <div class="photo-pin-placeholder" aria-hidden="true">
                 <p class="pin-label">Ranger waypoint</p>
                 <p class="pin-name" id="photo-pin-name"></p>
@@ -647,6 +665,7 @@
         const listPanel = document.getElementById("list-panel");
         const searchEl = document.getElementById("search");
         const photoEl = document.getElementById("photo");
+        const photoLoadingEl = document.getElementById("photo-loading");
         const photoErrorEl = document.getElementById("photo-error");
         const photoLightboxEl = document.getElementById("photo-lightbox");
         const photoLightboxStageEl = document.getElementById("photo-lightbox-stage");
@@ -955,6 +974,13 @@
           }
           photoErrorEl.textContent = message;
           photoErrorEl.hidden = !message;
+        }
+
+        function showPhotoLoading(show) {
+          if (!photoLoadingEl) {
+            return;
+          }
+          photoLoadingEl.hidden = !show;
         }
 
         function fmtDmsSeconds(sec) {
@@ -1845,6 +1871,8 @@
             await persistNotesForCurrentSelection();
             selected = null;
             photoEl.removeAttribute("src");
+            showPhotoLoading(false);
+            showPhotoError("");
             metaEl.textContent = "No rows match the filter.";
             var notesTa = document.getElementById("photo-notes");
             if (notesTa) {
@@ -1932,14 +1960,18 @@
             var mediaMessage = photoMediaStatusMessage(p);
             if (mediaMessage) {
               photoEl.removeAttribute("src");
+              showPhotoLoading(false);
               showPhotoError(mediaMessage);
             } else {
               showPhotoError("");
+              showPhotoLoading(true);
+              photoEl.removeAttribute("src");
               photoEl.src = p.media_url || "/media/" + encodeURIComponent(p.filename);
             }
           } else {
             photoEl.removeAttribute("src");
             photoEl.alt = p.name || "Waypoint";
+            showPhotoLoading(false);
             showPhotoError("");
           }
           renderMeta(p);
@@ -2093,7 +2125,11 @@
           photoEl.addEventListener("click", function () {
             openPhotoLightbox();
           });
+          photoEl.addEventListener("load", function () {
+            showPhotoLoading(false);
+          });
           photoEl.addEventListener("error", function () {
+            showPhotoLoading(false);
             if (selected && selected.kind === "photo") {
               showPhotoError("The browser could not load this photo from " + (selected.media_url || "the media route") + ".");
             }
