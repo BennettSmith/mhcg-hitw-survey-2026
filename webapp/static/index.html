@@ -220,7 +220,8 @@
         color: var(--text);
         max-width: min(100%, 17rem);
       }
-      #meta-block #copy-coords-btn {
+      #meta-block #copy-coords-btn,
+      #meta-block #open-earth-btn {
         font: inherit;
         font-size: 0.78rem;
         padding: 0.22rem 0.55rem;
@@ -230,7 +231,8 @@
         color: var(--text);
         cursor: pointer;
       }
-      #meta-block #copy-coords-btn:hover {
+      #meta-block #copy-coords-btn:hover,
+      #meta-block #open-earth-btn:hover {
         background: var(--accent-soft);
         border-color: var(--accent);
       }
@@ -1046,6 +1048,15 @@
           }
         }
 
+        function buildGoogleEarthUrl(lat, lon) {
+          var la = Number(lat);
+          var lo = Number(lon);
+          if (!isFinite(la) || !isFinite(lo)) {
+            return "";
+          }
+          return "https://earth.google.com/web/search/" + encodeURIComponent(la + "," + lo);
+        }
+
         function copyToClipboard(text) {
           if (!text) {
             return Promise.reject();
@@ -1118,6 +1129,7 @@
               optionsHtml +
               "</select>" +
               '<button type="button" id="copy-coords-btn" title="Copy coordinates in the selected format">Copy</button>' +
+              '<button type="button" id="open-earth-btn" title="Open this location in Google Earth">Earth</button>' +
               "</span></dd>" +
               "<dt>Elevation</dt>" +
               elevDd +
@@ -1149,6 +1161,7 @@
             optionsHtml +
             "</select>" +
             '<button type="button" id="copy-coords-btn" title="Copy coordinates in the selected format">Copy</button>' +
+            '<button type="button" id="open-earth-btn" title="Open this photo location in Google Earth">Earth</button>' +
             "</span></dd>" +
             "<dt>Elevation</dt>" +
             elevDdPhoto +
@@ -1184,6 +1197,19 @@
               window.alert("Could not copy to the clipboard.");
             }
           );
+        });
+
+        metaEl.addEventListener("click", function (e) {
+          var btn = e.target.closest("#open-earth-btn");
+          if (!btn || !metaEl.contains(btn) || !selected) {
+            return;
+          }
+          var url = buildGoogleEarthUrl(selected.latitude, selected.longitude);
+          if (!url) {
+            window.alert("Could not open Google Earth for this location.");
+            return;
+          }
+          window.open(url, "_blank", "noopener");
         });
 
         function createBaseLayers() {
