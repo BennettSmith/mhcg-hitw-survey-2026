@@ -18,6 +18,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -25,8 +29,13 @@ jobs:
           node-version: "20"
           cache: npm
 
-      - name: Install dev dependencies
-        run: make install-dev
+      - name: Install Python dev dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Run CI
         run: make ci

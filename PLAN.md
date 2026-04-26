@@ -2,56 +2,46 @@
 
 ## Status
 - Approved
-- Completed
+- In progress
 
 ## Goal
-- Add GitHub-side enforcement so `make ci` runs before changes can merge to `main`.
-- Protect `main` so Render only auto-deploys code that has already passed the repo's CI gate.
+- Reduce GitHub Actions runtime for the hosted `ci` workflow without changing the repo's test or coverage policy.
 
 ## In Scope
-- Add a GitHub Actions workflow that runs `make install-dev` and `make ci` on pull requests and pushes to `main`.
-- Use `gh` to inspect the current repo configuration and, if allowed, configure branch protection for `main`.
-- Require the GitHub CI check to pass before merging to `main`.
-- Preserve the current Render auto-deploy-from-main workflow.
-- Update documentation if the repo's contributor workflow needs to mention GitHub-side CI enforcement.
+- Optimize `.github/workflows/ci.yml` so repeated runs spend less time reinstalling development tooling.
+- Keep the same hosted checks: install dependencies, run `make ci`, and preserve the existing `ci` status check name used by branch protection.
+- Prefer low-maintenance improvements before considering a custom CI container image.
 
 ## Out Of Scope
-- Render-side API or dashboard changes unless they become strictly necessary.
-- Changes to the application runtime, tests, or coverage policy themselves.
+- Building or maintaining a custom CI container image in this pass.
+- Changes to application behavior, tests, coverage thresholds, or Render deployment behavior.
 
 ## Agreed Constraints
-- Prefer GitHub as the enforcement point and leave Render auto-deploying from `main`.
-- Use PR-based merges into `main`; direct pushes should no longer be the normal path.
-- The workflow should run both Python and frontend checks through existing `make` targets rather than duplicating logic.
-- Branch protection should require the GitHub CI check before merge.
-- If GitHub-side automation is blocked by an API limitation or check-name discovery issue, stop at the nearest safe point and report the exact manual follow-up.
+- Keep GitHub as the enforcement point and leave Render auto-deploying from `main`.
+- Preserve the PR gate and branch-protection workflow already in place.
+- Prefer simple, maintainable optimizations: caching and CI-appropriate install commands.
+- Avoid changing the required status check name so existing branch protection remains valid.
 
 ## Tooling Decisions
-- GitHub Actions will be the hosted CI runner.
-- The workflow will use `actions/checkout`, `actions/setup-python`, and `actions/setup-node`.
-- The workflow will call `make install-dev` and `make ci`.
-- Branch protection should target `main` and require the GitHub Actions CI check.
+- Use `actions/setup-python` pip caching for `requirements.txt` and `requirements-dev.txt`.
+- Use `npm ci` rather than `npm install` in hosted CI for reproducibility and speed.
+- Keep local `make install-dev` unchanged for contributor setup; optimize the hosted workflow directly.
 
 ## Planned Steps
-1. Verify `gh` authentication, repo identity, and permission level.
-2. Add `.github/workflows/ci.yml` to run `make install-dev` and `make ci` on PRs and pushes to `main`.
-3. Run local validation as needed so the workflow content matches the current repo commands.
-4. Commit the workflow change on a non-`main` branch if needed for the PR-based flow.
-5. Use `gh` / GitHub API to configure branch protection on `main` so the CI check is required before merge.
-6. Report any remaining manual GitHub or Render follow-up, especially if the protection rule must wait for the workflow check to exist remotely first.
-
-## Documentation Changes
-- Update docs only if the contributor workflow now needs explicit GitHub/PR enforcement notes.
+1. Update the GitHub Actions workflow to enable pip caching.
+2. Replace the workflow's broad `make install-dev` step with CI-specific Python and Node install steps.
+3. Keep the final hosted execution path on `make ci` so the workflow still exercises the repo's canonical definition-of-done command.
+4. Push the workflow update to the existing PR branch and watch the new run.
+5. Compare the hosted workflow shape and report the runtime-improvement strategy, plus whether a custom container still looks unnecessary.
 
 ## Verification Plan
-1. Confirm the workflow file is syntactically valid and uses the repo's existing commands.
-2. Push the workflow so GitHub can register the CI check.
-3. Verify the check appears on a PR or push.
-4. Apply or validate branch protection so the CI check is required on `main`.
-5. Confirm Render can continue auto-deploying from `main` without additional changes.
+1. Validate the updated workflow logic against the repo's existing `make ci` contract.
+2. Push the workflow change and confirm GitHub Actions reruns successfully.
+3. Confirm the `ci` status check name remains stable so branch protection still applies.
 
 ## Risks To Watch
-- GitHub branch protection may need the workflow check to exist remotely before the required-status-check rule can be applied cleanly.
-- If direct pushes to `main` are already common, protection may temporarily interrupt that workflow until PR-based merges are adopted.
+- Because `make ci` still expects Node and Python tooling to exist, the workflow must continue creating `.venv` and installing packages correctly.
+- Over-optimizing the workflow could accidentally diverge hosted CI from the documented repo commands; keep the workflow close to `make ci` semantics.
 
-- Approved by user; execution completed.
+## Approval
+- Approved by user; execution in progress.
