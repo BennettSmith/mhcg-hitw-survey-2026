@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY webapp/ webapp/
 COPY track/ track/
+COPY survey_photos.yaml .
+COPY photos/ photos/
 
 RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /work
@@ -19,4 +21,5 @@ USER app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "webapp.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Render and other hosts set PORT; default 8000 for local `docker run`.
+CMD ["sh", "-c", "exec uvicorn webapp.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

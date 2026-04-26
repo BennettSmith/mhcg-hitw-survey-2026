@@ -1,0 +1,12 @@
+# Blueprint: https://render.com/docs/blueprint-spec
+# In the Render dashboard: New → Blueprint → connect this repo, or paste this file.
+services:
+  - type: web
+    name: mhcg-hitw-survey-viewer
+    runtime: docker
+    # Use `starter` (or higher) if you want the instance to stay up without free-tier spin-down.
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
